@@ -30,7 +30,7 @@ import glob
 def adjust_labels(data):
     """Pre-transform function to adjust labels"""
     # Handle different label scenarios
-    if data.y.item() == 1:
+    if (data.y.item() == 1)  :
         data.y = torch.tensor(0)
     elif data.y.item() == 2:
         data.y = torch.tensor(1)

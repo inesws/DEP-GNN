@@ -23,7 +23,6 @@ sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', '
 import utils
 from utils.customDataset import BrainGraphDataset
 from utils.kFoldDataLoader import KFold_DataLoader
-from utils.EarlyStopping2 import EarlyStopping2
 from utils.model_utils import read_yaml
 from utils.dataset_utils import adjust_labels
 
@@ -40,32 +39,9 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def load_pretrained_sampler(sampler, params):
-    """Helper function to load pretrained sampler weights"""
-    if params.use_pretrained_sampler and os.path.exists(params.sampler_pretrain_dir):
-        map_location = torch.device(f'cuda:{params.cuda}')
-        checkpoint = torch.load(params.sampler_pretrain_dir, map_location=map_location)
-        
-        # Handle both old format (state_dict only) and new format (checkpoint dict)
-        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-            # New format: checkpoint dictionary with state_dict and min_sp
-            sampler.load_state_dict(checkpoint['state_dict'])
-            sampler.min_sp = checkpoint['min_sp']
-            print(f"  - Loaded pretrained DEP sampler with min_sp={sampler.min_sp:.4f}")
-            if 'epoch' in checkpoint:
-                print(f"  - From epoch: {checkpoint['epoch']}")
-            if 'f1' in checkpoint:
-                print(f"  - F1 score: {checkpoint['f1']:.4f}")
-        else:
-            # Old format: state_dict only
-            sampler.load_state_dict(checkpoint)
-            print(f"  - Loaded pretrained DEP sampler (old format, default min_sp={sampler.min_sp:.4f})")
-    return sampler
-
-
-def train_one_fold(params, data_loaders, model, sampler):
+def train_one_fold(params, data_loaders, model):
     """Train a single fold or single run"""
-    trainer = Trainer(params, data_loaders, model, sampler)
+    trainer = Trainer(params, data_loaders, model)
     results = trainer.train_for_classification()
     return results
 
@@ -86,18 +62,9 @@ def main():
     parser.add_argument('--weight_decay', type=float, default=None, help='weight decay (default: 5e-2)')
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer AdamW,(Adam)')
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout, 0=None')
-
-    # regression: use regression head for regression tasks;
-    # bin_regression: uses a classification in bines + regression for regression tasks;
-
-    """############ DEP Sampler  ############"""
-    parser.add_argument('--alpha', type=float, default=1e-5, help='alpha sparsity hyperparameter (default: 1e-5)')
-    parser.add_argument('--beta', type=float, default=0.001, help='beta sparsity hyperparameter (default: 1e-5)')
-    parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
-    parser.add_argument('--curr_sp', type=float, default=0.05, help='current sparsity level (default: 0.05)')
-    parser.add_argument('--iter_step', type=int, default=9, help='num epoch to increase sp level (default: 10)')
-    parser.add_argument('--prune_sp', type=float, default=0.05, help='incremental prunning sparsity (default: 0.05)')
-    parser.add_argument('--dropout', type=float, default=None, help='dropout')
+    parser.add_argument('--model_dir', type=str, 
+                        default='/home/isampaio/Desktop/Ines/DEPGNN/noSampler_results/',
+                        help='directory to save trained models')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
@@ -115,21 +82,6 @@ def main():
     parser.add_argument('--k_folds',type=int, default= 4, help='num of k folds (default: 4)')
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader') # to be used in data_loaders
 
-    """############ CRITICAL SETTINGS: Downstream dataset settings ############"""
-
-    ## freeze cbramod backbone:
-    parser.add_argument('--freeze', type=bool,
-                        default=False, help='freeze mode for DEP') 
-    parser.add_argument('--use_pretrained_sampler', type=bool, default=False, 
-                    help='whether to load pretrained DEP sampler weights')
-    parser.add_argument('--sampler_pretrain_dir', type=str,
-                    default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth', 
-                    help='path to pretrained DEP sampler checkpoint (includes weights and min_sp)')
-    parser.add_argument('--DEP_lr', type=float, default=None,
-                    help='learning rate for DEP sampler (if None, uses same as --lr)')
-    parser.add_argument('--model_dir', type=str, 
-                    default='/home/isampaio/Desktop/Ines/DEPGNN/results/model1',
-                    help='directory to save trained models')
 
 
     ########## Parse parameters ####
@@ -143,7 +95,8 @@ def main():
 
     hdf5_path =os.path.join(params.data_dir, f"{params.dataset_name}.h5") 
     dataset_dir = os.path.join(params.data_dir, f"{params.dataset_name}_Dataset")
-    dataset = BrainGraphDataset(root=Path(dataset_dir), hdf5_path=hdf5_path,pre_transform=adjust_labels )
+    #dataset = BrainGraphDataset(root=Path(dataset_dir), hdf5_path=hdf5_path,pre_transform=adjust_labels )
+    dataset = BrainGraphDataset(root=Path(dataset_dir), hdf5_path=hdf5_path)
 
     train_size = int(len(dataset)*params.split[0])
 
@@ -195,14 +148,9 @@ def main():
         
         # Initialize model and sampler
         model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
-        sampler = models.DEP(params, node_feat_dim, output_dim)
-        
-        # Load pretrained weights if specified
-        if params.use_pretrained_sampler:
-            sampler = load_pretrained_sampler(sampler, params)
         
         # Train
-        results = train_one_fold(params, data_loaders, model, sampler)
+        results = train_one_fold(params, data_loaders, model)
         
     else:
         # K-fold cross-validation
@@ -233,12 +181,7 @@ def main():
             
             # Reinitialize model and sampler for each fold (fresh start)
             fold_model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
-            fold_sampler = models.DEP(params, node_feat_dim, output_dim)
-            
-            # Load pretrained weights if specified
-            if params.use_pretrained_sampler:
-                fold_sampler = load_pretrained_sampler(fold_sampler, params)
-            
+
             # Update model_dir to save fold-specific models
             # Include repeat number if multiple repeats
             if params.num_repeats > 1:
@@ -248,7 +191,7 @@ def main():
             params.model_dir = os.path.join(original_model_dir, folder_name)
             
             # Train this fold
-            results = train_one_fold(params, data_loaders, fold_model, fold_sampler)
+            results = train_one_fold(params, data_loaders, fold_model)
             all_results.append(results)
             
             # Restore original model_dir
@@ -266,4 +209,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -12,12 +12,12 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 
 class Trainer(object):
-    def __init__(self, params, data_loader, model, sampler):
+    def __init__(self, params, data_loader, model, sampler=None):
         self.params = params
         self.data_loader = data_loader
 
         self.model = model.cuda()
-        self.sampler = sampler.cuda()
+        self.sampler = sampler.cuda() if sampler is not None else None
 
         if params.loss == 'CrossEntropy':
             self.criterion = CrossEntropyLoss().cuda()
@@ -79,9 +79,7 @@ class Trainer(object):
                         self.optimizer = torch.optim.AdamW(all_params, lr=self.params.lr)
 
                 
-             
-
-                                            
+                                             
         
         print(self.model)
 
