@@ -4,20 +4,19 @@ from timeit import default_timer as timer
 
 import numpy as np
 import torch
-from torch.nn import  MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
+from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
 from tqdm import tqdm
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, confusion_matrix
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 
-class Trainer(object):
-    def __init__(self, params, data_loader, model, sampler=None):
+class TrainerGNN(object):
+    def __init__(self, params, data_loader, model):
         self.params = params
         self.data_loader = data_loader
 
         self.model = model.cuda()
-        self.sampler = sampler.cuda() if sampler is not None else None
 
         if params.loss == 'CrossEntropy':
             self.criterion = CrossEntropyLoss().cuda()
@@ -26,60 +25,16 @@ class Trainer(object):
 
         self.best_model_states = None
 
-        ### Define DEP
-
-        # Handle DEP sampler freeze mode
-        if self.sampler is not None:
-            if params.freeze:
-                for param in self.sampler.parameters():
-                    param.requires_grad = False
-                print('DEP Sampler in Freeze mode')
-            else:
-                for param in self.sampler.parameters():
-                    param.requires_grad = True
-                print('DEP Sampler in Train mode')
-
-
-        
-        # Separate parameters for different learning rates
-        sampler_params = []
-        model_params = []
-        
-        # Get sampler parameters if sampler exists and not frozen
-        if self.sampler is not None and not params.freeze:
-            sampler_params = list(self.sampler.parameters())
-        
         # Get model parameters
         model_params = list(self.model.parameters())
         
         # Create optimizer
         if self.params.optimizer == 'Adam':
-            if self.params.DEP_lr is not None and len(sampler_params) > 0:
-                # Different learning rates for sampler and model
-                if params.weight_decay is not None:
-                     self.optimizer = torch.optim.AdamW([
-                        {'params': sampler_params, 'lr': self.params.DEP_lr},
-                        {'params': model_params, 'lr': self.params.lr}
-                    ], weight_decay=self.params.weight_decay)
-                else:
-                    self.optimizer = torch.optim.AdamW([
-                        {'params': sampler_params, 'lr': self.params.DEP_lr},
-                        {'params': model_params, 'lr': self.params.lr}
-                    ])
-
-                print(f'Sampler LR: {self.params.DEP_lr}, Model LR: {self.params.lr}')
-            else:
-                # Same learning rate for all, or sampler is frozen
-                all_params = sampler_params + model_params
-                if params.weight_decay is not None:
-
-                        self.optimizer = torch.optim.AdamW(all_params, lr=self.params.lr,
-                                                           weight_decay=self.params.weight_decay)
-                else: 
-                        self.optimizer = torch.optim.AdamW(all_params, lr=self.params.lr)
-
-                
-                                             
+            if params.weight_decay is not None:
+                self.optimizer = torch.optim.AdamW(model_params, lr=self.params.lr,
+                                                   weight_decay=self.params.weight_decay)
+            else: 
+                self.optimizer = torch.optim.AdamW(model_params, lr=self.params.lr)
         
         print(self.model)
 
@@ -99,10 +54,7 @@ class Trainer(object):
             pred = model(x)
             truths += y.cpu().squeeze().numpy().tolist()
             preds += pred.cpu().squeeze().numpy().tolist()
-            #preds += torch.exp(pred).cpu().squeeze().numpy().tolist()
 
-            
-            #loss = self.criterion(pred, y_log)
             loss = self.criterion(pred, y)
             losses.append(loss.data.cpu().numpy())
 
@@ -124,11 +76,9 @@ class Trainer(object):
         loss_best = 10000
         epochs_no_improve = 0
 
-
         for epoch in range(self.params.epochs):
             
             self.model.train()
-            self.sampler.train()
             start_time = timer()
             losses = []
             truths = []
@@ -151,16 +101,14 @@ class Trainer(object):
                 losses.append(loss.data.cpu().numpy())
                 if self.params.clip_value > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                    # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
                 self.optimizer.step()
-                self.optimizer_scheduler.step()
 
             optim_state = self.optimizer.state_dict()
 
             truths = np.array(truths)
             preds = np.array(preds)
             
-            # Classification metrics
+            # Regression metrics
             truths = np.array(truths)
             preds = np.array(preds)
             t_corrcoef = np.corrcoef(truths, preds)[0, 1]
@@ -168,9 +116,7 @@ class Trainer(object):
             t_rmse = mean_squared_error(truths, preds) ** 0.5
             t_n_rmse = t_rmse/ np.std(truths)
 
-
             with torch.no_grad():
-                #t_corrcoef, t_r2, t_rmse, t_n_rmse, _ = self.get_metrics_for_regression(self.data_loader['train'], self.model)
                 v_corrcoef, v_r2, v_rmse, v_n_rmse, v_loss = self.get_metrics_for_regression(self.data_loader['val'], self.model)
 
                 print(
@@ -186,53 +132,42 @@ class Trainer(object):
                     )
                 )
                 print(
-                    "Val Loss: {:.5f}, norm_rmse: {:.10f}, rmse: {:.5f}, corrcoef: {:.5f}, r2: {:.5f},  LR: {:.5f}, Time elapsed {:.2f} mins".format(
+                    "Val Loss: {:.5f}, norm_rmse: {:.10f}, rmse: {:.5f}, corrcoef: {:.5f}, r2: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
                         v_loss,
                         v_n_rmse,
                         v_rmse,
                         v_corrcoef,
                         v_r2,
-                        v_rmse,
                         optim_state['param_groups'][0]['lr'],
                         (timer() - start_time) / 60
                     )
                 )                
-                if v_loss < loss_best: # if v_n_rmse < n_rmse_best
+                if v_loss < loss_best:
                     print("Val loss decreasing....saving weights !! ")
 
                     best_epoch = epoch + 1
-                    best_metric = v_metric
                     loss_best = v_loss
 
                     self.best_model_states = copy.deepcopy(self.model.state_dict())
 
                     epochs_no_improve = 0
 
-
                     if not os.path.isdir(self.params.model_dir):
                         os.makedirs(self.params.model_dir)
 
                     # Save model
-                    model_path = self.params.model_dir + "/model_epoch{}_metric_{:.5f}.pth".format(best_epoch, best_metric)
+                    model_path = self.params.model_dir + "/model_epoch{}_loss_{:.5f}.pth".format(best_epoch, loss_best)
                     torch.save(self.model.state_dict(), model_path)
                     print(f"Model saved in {model_path}")
 
-                    # Save sampler if it exists
-                    if self.sampler is not None:
-                        sampler_path = self.params.model_dir + "/sampler_epoch{}_metric_{:.5f}.pth".format(best_epoch, metric_value)
-                        torch.save(self.sampler.state_dict(), sampler_path)
-                        print(f"DEP Sampler saved in {sampler_path}")
-
-                else: # No val improvement
+                else:
                     epochs_no_improve += 1
                 
-                if epochs_no_improve >= self.params.patience: # No val improvement for more than x epochs
-                    print(f"Early stopping at epoch {epoch}. Best Val Loss: {loss_best:.6f}, Best Val RMSE: {n_rmse_best:.10f} (epoch {best_r2_epoch})")
+                if epochs_no_improve >= self.params.patience:
+                    print(f"Early stopping at epoch {epoch}. Best Val Loss: {loss_best:.6f} (epoch {best_epoch})")
                     break
 
         self.model.load_state_dict(self.best_model_states)
-
-
 
         with torch.no_grad():
             print("***************************Test************************")
@@ -249,15 +184,13 @@ class Trainer(object):
 
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
-            model_path = self.params.model_dir + "/epoch{}_NormRMSE_{:.5f}.pth".format(best_r2_epoch, n_rmse)
+            model_path = self.params.model_dir + "/final_model_NormRMSE_{:.5f}.pth".format(n_rmse)
             torch.save(self.model.state_dict(), model_path)
             print("model save in " + model_path)
 
-    def get_metrics_for_classification(self, data_loader, model, sampler=None):
+    def get_metrics_for_classification(self, data_loader, model):
 
         model.eval()
-        if sampler is not None:
-            sampler.eval()
 
         truths = []
         preds = []
@@ -267,17 +200,11 @@ class Trainer(object):
             data = batch
             data = data.cuda()
             
-            # Pass through sampler if exists
-            if sampler is not None:
-                sampled_data, _ = sampler(data)
+            # Forward pass through model (no sampler)
+            if data.edge_attr is not None:
+                out = model(data.x, data.edge_index, data.batch, data.edge_attr)
             else:
-                sampled_data = data
-            
-            # Forward pass through model
-            if sampled_data.edge_attr is not None:
-                out = model(sampled_data.x, sampled_data.edge_index, sampled_data.batch, sampled_data.edge_attr)
-            else:
-                out = model(sampled_data.x, sampled_data.edge_index, sampled_data.batch)
+                out = model(data.x, data.edge_index, data.batch)
             
             # Get labels and predictions
             truths += data.y.cpu().numpy().tolist()
@@ -290,13 +217,7 @@ class Trainer(object):
                 loss = self.criterion(out, labels.float())
             else:
                 # Binary: BCEWithLogitsLoss expects raw logits and float labels
-                # out shape: [batch_size, 1] or [batch_size]
                 loss = self.criterion(out.squeeze(), data.y.float())
-            
-            # Add regularization if sampler exists and not frozen
-            if sampler is not None and not self.params.freeze:
-                l1_penalty = sampler.l1_norm()
-                loss = loss + l1_penalty
             
             losses.append(loss.item())
 
@@ -345,7 +266,6 @@ class Trainer(object):
         for epoch in range(self.params.epochs):
             
             self.model.train()
-            self.sampler.train()
             start_time = timer()
             losses = []
             truths = []
@@ -356,27 +276,20 @@ class Trainer(object):
                 data = data.cuda()
                 self.optimizer.zero_grad()
 
-                # Pass through sampler
-                sampled_data, _ = self.sampler(data)
-                
-                # Forward pass through model
-                if sampled_data.edge_attr is not None:
-                    out = self.model(sampled_data.x, sampled_data.edge_index, sampled_data.batch, sampled_data.edge_attr)
+                # Forward pass through model (no sampler)
+                if data.edge_attr is not None:
+                    out = self.model(data.x, data.edge_index, data.batch, data.edge_attr)
                 else:
-                    out = self.model(sampled_data.x, sampled_data.edge_index, sampled_data.batch)
+                    out = self.model(data.x, data.edge_index, data.batch)
                 
                 # Get labels
                 if self.params.loss == 'CrossEntropyLoss':
                     # Multi-class: use one-hot encoded labels
                     labels = torch.nn.functional.one_hot(data.y, num_classes=out.shape[1])
-                    loss_clf = self.criterion(out, labels.float())
+                    loss = self.criterion(out, labels.float())
                 else:
                     # Binary: BCEWithLogitsLoss expects raw logits and float labels
-                    loss_clf = self.criterion(out.squeeze(), data.y.float())
-                
-                # Add regularization
-                l1_penalty = self.sampler.l1_norm()
-                loss = loss_clf + l1_penalty
+                    loss = self.criterion(out.squeeze(), data.y.float())
                 
                 truths += data.y.detach().cpu().numpy().tolist()
                 preds += out.detach().cpu().numpy().tolist()
@@ -424,7 +337,7 @@ class Trainer(object):
 
             with torch.no_grad():
                 v_acc, v_f1, v_precision, v_recall, v_auc, v_loss = self.get_metrics_for_classification(
-                    self.data_loader['val'], self.model, self.sampler
+                    self.data_loader['val'], self.model
                 )
 
                 print(
@@ -451,27 +364,6 @@ class Trainer(object):
                     )
                 )
                 
-                # Progressive pruning: increase sparsity every iter_step epochs
-                if (epoch % self.params.iter_step == 0) and (epoch != 0) and not self.params.freeze:
-                    current_edge_reduction = self.sampler.min_sp * 100  # Convert to percentage
-                    
-                    # Adaptive step size based on current sparsity level
-                    if current_edge_reduction >= 90 and current_edge_reduction < 99:
-                        step = 0.01
-                    elif current_edge_reduction >= 99 and current_edge_reduction < 100:
-                        step = 0.001
-                    elif current_edge_reduction >= 100:
-                        print(f"Maximum sparsity (100%) reached. Stopping pruning.")
-                        step = 0.0
-                    else:
-                        step = self.params.prune_sp  # Use default pruning step
-                    
-                    if step > 0:
-                        with torch.no_grad():
-                            old_min_sp = self.sampler.min_sp
-                            self.sampler.update_prune(step) # this automatically updates sampler.min_sp
-                            print(f"Epoch {epoch + 1}: Updated pruning sparsity from {old_min_sp:.4f} to {self.sampler.min_sp:.4f} (edge reduction: {current_edge_reduction:.2f}%)")
-                
                 # Save best model based on F1 score
                 if v_f1 > f1_best: 
                     print("Val F1 improving....saving weights !! ")
@@ -481,11 +373,7 @@ class Trainer(object):
                     f1_best = v_f1
                     loss_best = v_loss
 
-                    self.best_model_states = {
-                        'model': copy.deepcopy(self.model.state_dict()),
-                        'sampler': copy.deepcopy(self.sampler.state_dict()),
-                        'prune_percentage': copy.deepcopy(self.sampler.min_sp)
-                    }
+                    self.best_model_states = copy.deepcopy(self.model.state_dict())
 
                     epochs_no_improve = 0
 
@@ -497,17 +385,6 @@ class Trainer(object):
                     torch.save(self.model.state_dict(), model_path)
                     print(f"Model saved in {model_path}")
 
-                    # Save sampler with min_sp checkpoint
-                    sampler_path = self.params.model_dir + "/sampler_epoch{}_F1_{:.4f}.pth".format(best_epoch, f1_best)
-                    sampler_checkpoint = {
-                        'state_dict': self.sampler.state_dict(),
-                        'min_sp': self.sampler.min_sp,
-                        'epoch': best_epoch,
-                        'f1': f1_best
-                    }
-                    torch.save(sampler_checkpoint, sampler_path)
-                    print(f"DEP Sampler saved in {sampler_path} with min_sp={self.sampler.min_sp:.4f}")
-
                 else:
                     epochs_no_improve += 1
                 
@@ -516,16 +393,14 @@ class Trainer(object):
                     break
 
         # Load best model
-        self.model.load_state_dict(self.best_model_states['model'])
-        self.sampler.load_state_dict(self.best_model_states['sampler'])
-        self.sampler.min_sp = self.best_model_states['prune_percentage']
-        print(f"Restored best model with sparsity level: {self.sampler.min_sp:.4f}")
+        self.model.load_state_dict(self.best_model_states)
+        print(f"Restored best model from epoch {best_epoch}")
 
         # Test evaluation
         with torch.no_grad():
             print("***************************Test************************")
             test_acc, test_f1, test_precision, test_recall, test_auc, test_loss = self.get_metrics_for_classification(
-                self.data_loader['test'], self.model, self.sampler
+                self.data_loader['test'], self.model
             )
             print("***************************Test Results************************")
             print(
@@ -546,14 +421,20 @@ class Trainer(object):
             final_model_path = self.params.model_dir + "/final_model_testF1_{:.4f}.pth".format(test_f1)
             torch.save(self.model.state_dict(), final_model_path)
             
-            final_sampler_path = self.params.model_dir + "/final_sampler_testF1_{:.4f}.pth".format(test_f1)
-            final_sampler_checkpoint = {
-                'state_dict': self.sampler.state_dict(),
-                'min_sp': self.sampler.min_sp,
-                'test_f1': test_f1,
-                'test_acc': test_acc
-            }
-            torch.save(final_sampler_checkpoint, final_sampler_path)
-            
             print(f"Final model saved in {final_model_path}")
-            print(f"Final sampler saved in {final_sampler_path} with min_sp={self.sampler.min_sp:.4f}")
+        
+        # Return comprehensive results
+        results = {
+            'best_epoch': best_epoch,
+            'best_val_acc': acc_best,
+            'best_val_f1': f1_best,
+            'best_val_loss': loss_best,
+            'test_acc': test_acc,
+            'test_f1': test_f1,
+            'test_precision': test_precision,
+            'test_recall': test_recall,
+            'test_auc': test_auc,
+            'test_loss': test_loss
+        }
+        
+        return results

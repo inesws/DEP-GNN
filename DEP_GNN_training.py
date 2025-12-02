@@ -15,7 +15,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from Trainer import Trainer
+from TrainerDEPGNN import Trainer
 
 # Dataset
 sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', 'utils'))
@@ -102,19 +102,18 @@ def main():
     parser.add_argument('--dataset_name', type=str,
                         default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Handedness_class',
                         help='name of the dataset folder to use?')
-    
     parser.add_argument('--data_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
-                        help='datasets_dir') # full_ccd_r1_to_11_nor5_challenge_1.pkl , train_ccd_r1_to_r11_nor5_challenge_2.pkl
-    parser.add_argument('--split', type=float, # TH
+                        help='datasets_dir') 
+    parser.add_argument('--split', type=float, 
                         nargs= '+',
-                        default= '0.8 0.1 0.1',
+                        default=[0.8, 0.1, 0.1],
                         help='Train/val/test proportions, e.g.,--split 0.9 0.1 0 --split 0.8 0.1 0.1')
     parser.add_argument('--num_repeats', type=int, default=1, help='num of repeats for k-fold (default: 1)')
     parser.add_argument('--k_folds',type=int, default= 4, help='num of k folds (default: 4)')
-    parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader') # to be used in data_loaders
+    parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader') # to be implemented 
 
-    """############ CRITICAL SETTINGS: Downstream dataset settings ############"""
+    """############ CRITICAL DEP SETTINGS############"""
 
     ## freeze cbramod backbone:
     parser.add_argument('--freeze', type=bool,
@@ -123,7 +122,7 @@ def main():
                     help='whether to load pretrained DEP sampler weights')
     parser.add_argument('--sampler_pretrain_dir', type=str,
                     default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth', 
-                    help='path to pretrained DEP sampler checkpoint (includes weights and min_sp)')
+                    help='path to pretrained DEP sampler checkpoint (includes weights and prune percentage)')
     parser.add_argument('--DEP_lr', type=float, default=None,
                     help='learning rate for DEP sampler (if None, uses same as --lr)')
     parser.add_argument('--model_dir', type=str, 
@@ -259,6 +258,47 @@ def main():
         print("K-Fold Cross-Validation Summary")
         print("=" * 60)
         print(f"Completed {len(all_results)} folds")
+        
+        # Calculate mean and std across all folds
+        if all_results:
+            import pandas as pd
+            
+            # Convert results to DataFrame for easy aggregation
+            results_df = pd.DataFrame(all_results)
+            
+            # Calculate statistics
+            mean_results = results_df.mean()
+            std_results = results_df.std()
+            
+            print("\n" + "=" * 60)
+            print("Aggregated K-Fold Results (Mean ± Std)")
+            print("=" * 60)
+            print(f"Best Val Accuracy:  {mean_results['best_val_acc']:.4f} ± {std_results['best_val_acc']:.4f}")
+            print(f"Best Val F1:        {mean_results['best_val_f1']:.4f} ± {std_results['best_val_f1']:.4f}")
+            print(f"Best Val Loss:      {mean_results['best_val_loss']:.4f} ± {std_results['best_val_loss']:.4f}")
+            print(f"\nTest Accuracy:      {mean_results['test_acc']:.4f} ± {std_results['test_acc']:.4f}")
+            print(f"Test F1:            {mean_results['test_f1']:.4f} ± {std_results['test_f1']:.4f}")
+            print(f"Test Precision:     {mean_results['test_precision']:.4f} ± {std_results['test_precision']:.4f}")
+            print(f"Test Recall:        {mean_results['test_recall']:.4f} ± {std_results['test_recall']:.4f}")
+            print(f"Test AUC:           {mean_results['test_auc']:.4f} ± {std_results['test_auc']:.4f}")
+            print(f"Test Loss:          {mean_results['test_loss']:.4f} ± {std_results['test_loss']:.4f}")
+            if 'final_sparsity' in results_df.columns:
+                print(f"Final Sparsity:     {mean_results['final_sparsity']:.4f} ± {std_results['final_sparsity']:.4f}")
+            
+            # Save results to CSV
+            results_save_path = os.path.join(original_model_dir, "kfold_results.csv")
+            results_df.to_csv(results_save_path, index=False)
+            print(f"\nDetailed results saved to: {results_save_path}")
+            
+            # Save summary statistics
+            summary_save_path = os.path.join(original_model_dir, "kfold_summary.csv")
+            summary_df = pd.DataFrame({
+                'metric': results_df.columns,
+                'mean': mean_results.values,
+                'std': std_results.values
+            })
+            summary_df.to_csv(summary_save_path, index=False)
+            print(f"Summary statistics saved to: {summary_save_path}")
 
     print('\n' + "=" * 60)
     print('Training Complete!')

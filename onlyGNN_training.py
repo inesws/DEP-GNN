@@ -15,7 +15,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from Trainer import Trainer
+from TrainerGNN import TrainerGNN
 
 # Dataset
 sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', 'utils'))
@@ -41,7 +41,7 @@ def setup_seed(seed):
 
 def train_one_fold(params, data_loaders, model):
     """Train a single fold or single run"""
-    trainer = Trainer(params, data_loaders, model)
+    trainer = TrainerGNN(params, data_loaders, model)
     results = trainer.train_for_classification()
     return results
 
