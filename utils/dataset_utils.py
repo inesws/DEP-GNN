@@ -27,6 +27,19 @@ import h5py
 from pathlib import Path
 import glob
 
+def adjust_labels(data):
+    """Pre-transform function to adjust labels"""
+    # Handle different label scenarios
+    if data.y.item() == 1:
+        data.y = torch.tensor(0)
+    elif data.y.item() == 2:
+        data.y = torch.tensor(1)
+    # Add more cases if needed:
+    # elif data.y.item() == 3:
+    #     data.y = torch.tensor(2)
+    
+    return data
+
 # Fisher's r-to-z transformation
 
 def fishers_r_z_transform(cm):

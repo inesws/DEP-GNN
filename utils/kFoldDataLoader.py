@@ -10,17 +10,16 @@ from sklearn.model_selection import RepeatedStratifiedKFold, RepeatedKFold
 
 class KFold_DataLoader(object):
 
-    def __init__(self, num_repeats, num_k, batch_size, stratify= False, random_seed=None):
+    def __init__(self, params, stratify= True):
         
-        self.num_repeats = num_repeats
-        self.num_k = num_k
-        self.batch_size = batch_size
-        self.random_seed = random_seed
+        self.num_repeats = params['num_repeats']
+        self.num_k = params['k_folds']
+        self.batch_size = params['batch_size']
+        self.random_seed = params['seed']
         self.stratify = stratify
-        self.rskf = RepeatedStratifiedKFold(n_repeats=num_repeats, n_splits=num_k, random_state=random_seed)
-        self.rkf = RepeatedKFold(n_repeats=num_repeats, n_splits=num_k, random_state=random_seed)
+        self.rskf = RepeatedStratifiedKFold(n_repeats=self.num_repeats, n_splits=self.num_k, random_state=self.random_seed)
+        self.rkf = RepeatedKFold(n_repeats=self.num_repeats, n_splits=self.num_k, random_state=self.random_seed)
         
-
 
     def get_nk_loaders(self, dataset):
 

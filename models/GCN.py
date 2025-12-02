@@ -32,10 +32,12 @@ class GCN(torch.nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.edge_dim = config['edge_attr']
-        self.activ_funct = config['activ_funct']
+        self.activ_funct = getattr(pyg_nn, config['activ_funct'])
         self.dropout = config['dropout']
         self.final_dropout = config['final_dropout']
-        self.graph_pooling_type = config['graph_pooling_type']
+        #self.graph_pooling_type = config['graph_pooling_type']
+        self.graph_pooling_type = getattr(pyg_nn, config['graph_pooling_type'])
+
 
         self.conv0 = GCNConv(input_dim, self.hidden_dim)
         self.conv = GCNConv(self.hidden_dim, self.hidden_dim)

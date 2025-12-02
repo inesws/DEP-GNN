@@ -1,0 +1,9 @@
+num_layers: [2]
+hidden_dim: [32, 64]          # list for hyperparameter sweep
+final_hidden_dim: [32]
+num_heads: [4]
+num_heads_final: [4]
+edge_attr: [1]
+activ_funct: [ReLU()]            # strings representing classes
+final_dropout: [0, 0.5]
+graph_pooling_type: [global_mean_pool]

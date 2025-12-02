@@ -5,14 +5,14 @@ from torch_scatter import scatter
 from torch_geometric.utils import softmax , dropout_edge
 
 class DEP(nn.Module):
-    def __init__(self, input_dim, output_dim, config):
+    def __init__(self, params, input_dim, output_dim):
         super(DEP, self).__init__()
         
-        self.alpha = config['alpha']
-        self.beta = config['beta']
-        self.lr = config['lr']
-        self.dropout = config['dropout']
-        self.min_sp = config['min_sp']
+        self.alpha = params['alpha']
+        self.beta = params['beta']
+        self.lr = params['lr']
+        self.dropout = params['dropout']
+        self.min_sp = params['curr_sp']
         self.input_dim = input_dim # num_node_features 
         self.output_dim = output_dim
 
