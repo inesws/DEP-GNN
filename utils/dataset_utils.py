@@ -27,6 +27,26 @@ import h5py
 from pathlib import Path
 import glob
 
+def find_output_dim(dataset):
+  """
+  Docstring for find_output_dim. For binary classes, catergorical 
+  classes, and one-hot encoded labels.
+  
+  :dataset: PyG dataset object
+  :returns: output_dim (int) - number of classes for classification
+  """
+  sample_y = dataset[0].y
+  if sample_y.dim() > 0 and sample_y.shape[0] > 1 and len(sample_y.shape) == 1:
+      # One-hot encoded
+      output_dim = sample_y.shape[0]
+  else:
+      # Categorical - find max class
+      all_labels = torch.cat([data.y.view(-1) for data in dataset])
+      output_dim = len(torch.unique(all_labels))
+
+  return output_dim
+   
+
 def adjust_labels(data):
     """Pre-transform function to adjust labels"""
     # Handle different label scenarios

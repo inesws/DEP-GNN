@@ -24,12 +24,12 @@ import utils
 from utils.customDataset import BrainGraphDataset
 from utils.kFoldDataLoader import KFold_DataLoader
 from utils.model_utils import read_yaml
-from utils.dataset_utils import adjust_labels
+from utils.dataset_utils import adjust_labels, find_output_dim
 
 # Model
 sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', 'models'))
 import models
-
+from models.DEP import DEP
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -76,21 +76,18 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='random seed (default: 3407)')
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 0)')
     parser.add_argument('--loss', type=str, default='CrossEntropyLoss', help='CrossEntropyLoss, BCEWithLogitsLoss')
+    parser.add_argument('--y_dim', type=int, default=2, help='Num of classes,either categorical or one-hot: 2 for binary or 2+ for multiclass with CrossEntropyLoss, 1 for binary with BCEWithLogitsLoss')
     parser.add_argument('--epochs', type=int, default=1000, help='number of epochs (default: 50)')
     parser.add_argument('--model_name', type=str, default='GCN', help='model name from model/<GNN_name>.py file')
-    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/config_GCN', help='model config files')
-    parser.add_argument('--patience', type=int, default=10, help='num of epochs patience for early_stopping (default: 10)')
+    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config files')
+    parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 128)')
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate (default: 1e-3)')
     parser.add_argument('--weight_decay', type=float, default=None, help='weight decay (default: 5e-2)')
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer AdamW,(Adam)')
-    parser.add_argument('--dropout', type=float, default=0.5, help='dropout, 0=None')
-
-    # regression: use regression head for regression tasks;
-    # bin_regression: uses a classification in bines + regression for regression tasks;
 
     """############ DEP Sampler  ############"""
-    parser.add_argument('--alpha', type=float, default=1e-5, help='alpha sparsity hyperparameter (default: 1e-5)')
+    parser.add_argument('--alpha', type=float, default=0.0001, help='alpha sparsity hyperparameter (default: 1e-5)')
     parser.add_argument('--beta', type=float, default=0.001, help='beta sparsity hyperparameter (default: 1e-5)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
     parser.add_argument('--curr_sp', type=float, default=0.05, help='current sparsity level (default: 0.05)')
@@ -100,7 +97,7 @@ def main():
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
-                        default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Handedness_class',
+                        default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Sex',
                         help='name of the dataset folder to use?')
     parser.add_argument('--data_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
@@ -123,8 +120,6 @@ def main():
     parser.add_argument('--sampler_pretrain_dir', type=str,
                     default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth', 
                     help='path to pretrained DEP sampler checkpoint (includes weights and prune percentage)')
-    parser.add_argument('--DEP_lr', type=float, default=None,
-                    help='learning rate for DEP sampler (if None, uses same as --lr)')
     parser.add_argument('--model_dir', type=str, 
                     default='/home/isampaio/Desktop/Ines/DEPGNN/results/model1',
                     help='directory to save trained models')
@@ -169,6 +164,8 @@ def main():
     #### Model Setup #####
     node_feat_dim = dataset.num_node_features
     output_dim = len(dataset[0].y.shape) + 2
+
+    output_dim = params.y_dim #find_output_dim(dataset)
     
     # Import model class
     import importlib
@@ -194,7 +191,7 @@ def main():
         
         # Initialize model and sampler
         model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
-        sampler = models.DEP(params, node_feat_dim, output_dim)
+        sampler = DEP(params, node_feat_dim, output_dim)
         
         # Load pretrained weights if specified
         if params.use_pretrained_sampler:
@@ -232,7 +229,7 @@ def main():
             
             # Reinitialize model and sampler for each fold (fresh start)
             fold_model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
-            fold_sampler = models.DEP(params, node_feat_dim, output_dim)
+            fold_sampler =DEP(params, node_feat_dim, output_dim)
             
             # Load pretrained weights if specified
             if params.use_pretrained_sampler:

@@ -19,7 +19,7 @@ class Trainer(object):
         self.model = model.cuda()
         self.sampler = sampler.cuda() if sampler is not None else None
 
-        if params.loss == 'CrossEntropy':
+        if params.loss == 'CrossEntropyLoss':
             self.criterion = CrossEntropyLoss().cuda()
         else:
             self.criterion = BCEWithLogitsLoss().cuda()
@@ -54,6 +54,31 @@ class Trainer(object):
         
         # Create optimizer
         if self.params.optimizer == 'Adam':
+            if self.params.DEP_lr is not None and len(sampler_params) > 0:
+                # Different learning rates for sampler and model
+                if params.weight_decay is not None:
+                     self.optimizer = torch.optim.Adam([
+                        {'params': sampler_params, 'lr': self.params.DEP_lr},
+                        {'params': model_params, 'lr': self.params.lr}
+                    ], weight_decay=self.params.weight_decay)
+                else:
+                    self.optimizer = torch.optim.Adam([
+                        {'params': sampler_params, 'lr': self.params.DEP_lr},
+                        {'params': model_params, 'lr': self.params.lr}
+                    ])
+
+                print(f'Sampler LR: {self.params.DEP_lr}, Model LR: {self.params.lr}')
+            else:
+                # Same learning rate for all, or sampler is frozen
+                all_params = sampler_params + model_params
+                if params.weight_decay is not None:
+
+                        self.optimizer = torch.optim.Adam(all_params, lr=self.params.lr,
+                                                           weight_decay=self.params.weight_decay)
+                else: 
+                        self.optimizer = torch.optim.Adam(all_params, lr=self.params.lr)
+        else:
+
             if self.params.DEP_lr is not None and len(sampler_params) > 0:
                 # Different learning rates for sampler and model
                 if params.weight_decay is not None:
@@ -324,12 +349,21 @@ class Trainer(object):
         # AUC-ROC
         try:
             if self.params.loss == 'CrossEntropyLoss':
-                # Multi-class AUC
-                auc = roc_auc_score(truths, preds_proba, multi_class='ovr', average='macro')
+                # Check if binary or multi-class
+                num_classes = preds_proba.shape[1] if len(preds_proba.shape) > 1 else 2
+                if num_classes == 2:
+                    # Binary: use probability of positive class (class 1)
+                    auc = roc_auc_score(truths, preds_proba[:, 1])
+                else:
+                    # Multi-class: use multi_class parameter
+                    auc = roc_auc_score(truths, preds_proba, multi_class='ovr', average='macro')
             else:
-                # Binary AUC
+                # Binary with BCEWithLogitsLoss
                 auc = roc_auc_score(truths, preds_proba)
-        except:
+        except Exception as e:
+            print(f"Warning: Could not calculate AUC-ROC: {e}")
+            print(f"Truths shape: {truths.shape}, unique values: {np.unique(truths)}")
+            print(f"Preds_proba shape: {preds_proba.shape}")
             auc = 0.0
         
         loss = np.mean(losses)
@@ -341,6 +375,8 @@ class Trainer(object):
         f1_best = 0
         loss_best = 10000
         epochs_no_improve = 0
+        print(f"Starting pruning percentage: {self.sampler.min_sp * 100 :.2f}%")
+
 
         for epoch in range(self.params.epochs):
             
@@ -394,6 +430,7 @@ class Trainer(object):
             truths = np.array(truths)
             preds = np.array(preds)
             
+
             # Classification metrics based on loss type
             if self.params.loss == 'CrossEntropyLoss':
                 # Multi-class: argmax over classes
@@ -414,12 +451,21 @@ class Trainer(object):
             # For AUC-ROC
             try:
                 if self.params.loss == 'CrossEntropyLoss':
-                    # Multi-class AUC
-                    t_auc = roc_auc_score(truths, t_preds_proba, multi_class='ovr', average='macro')
+                    # Check if binary or multi-class
+                    num_classes = t_preds_proba.shape[1] if len(t_preds_proba.shape) > 1 else 2
+                    if num_classes == 2:
+                        # Binary: use probability of positive class (class 1)
+                        t_auc = roc_auc_score(truths, t_preds_proba[:, 1])
+                    else:
+                        # Multi-class: use multi_class parameter
+                        t_auc = roc_auc_score(truths, t_preds_proba, multi_class='ovr', average='macro')
                 else:
-                    # Binary AUC
+                    # Binary with BCEWithLogitsLoss
                     t_auc = roc_auc_score(truths, t_preds_proba)
-            except:
+            except Exception as e:
+                print(f"Warning: Could not calculate training AUC-ROC: {e}")
+                print(f"Truths shape: {truths.shape}, unique values: {np.unique(truths)}")
+                print(f"Preds_proba shape: {t_preds_proba.shape}")
                 t_auc = 0.0
 
             with torch.no_grad():
@@ -470,11 +516,11 @@ class Trainer(object):
                         with torch.no_grad():
                             old_min_sp = self.sampler.min_sp
                             self.sampler.update_prune(step) # this automatically updates sampler.min_sp
-                            print(f"Epoch {epoch + 1}: Updated pruning sparsity from {old_min_sp:.4f} to {self.sampler.min_sp:.4f} (edge reduction: {current_edge_reduction:.2f}%)")
+                            print(f"Epoch {epoch + 1}: Updated pruning sparsity from {old_min_sp:.2f} to {self.sampler.min_sp:.2f} (edge reduction: {self.sampler.min_sp:.2f}%)")
                 
-                # Save best model based on F1 score
-                if v_f1 > f1_best: 
-                    print("Val F1 improving....saving weights !! ")
+                # Save best model based on validation loss
+                if v_loss < loss_best: 
+                    print("Val Loss decreasing....saving weights !! ")
 
                     best_epoch = epoch + 1
                     acc_best = v_acc
@@ -489,30 +535,30 @@ class Trainer(object):
 
                     epochs_no_improve = 0
 
-                    if not os.path.isdir(self.params.model_dir):
-                        os.makedirs(self.params.model_dir)
+                    #if not os.path.isdir(self.params.model_dir):
+                    #    os.makedirs(self.params.model_dir)
 
                     # Save model
-                    model_path = self.params.model_dir + "/model_epoch{}_F1_{:.4f}.pth".format(best_epoch, f1_best)
-                    torch.save(self.model.state_dict(), model_path)
-                    print(f"Model saved in {model_path}")
+                    #model_path = self.params.model_dir + "/model_epoch{}_loss_{:.4f}.pth".format(best_epoch, loss_best)
+                    #torch.save(self.model.state_dict(), model_path)
+                    #print(f"Model saved in {model_path}")
 
                     # Save sampler with min_sp checkpoint
-                    sampler_path = self.params.model_dir + "/sampler_epoch{}_F1_{:.4f}.pth".format(best_epoch, f1_best)
+                    #sampler_path = self.params.model_dir + "/sampler_epoch{}_loss_{:.4f}.pth".format(best_epoch, loss_best)
                     sampler_checkpoint = {
                         'state_dict': self.sampler.state_dict(),
                         'min_sp': self.sampler.min_sp,
                         'epoch': best_epoch,
-                        'f1': f1_best
+                        'loss': loss_best
                     }
-                    torch.save(sampler_checkpoint, sampler_path)
-                    print(f"DEP Sampler saved in {sampler_path} with min_sp={self.sampler.min_sp:.4f}")
+                    #torch.save(sampler_checkpoint, sampler_path)
+                    #print(f"DEP Sampler saved in {sampler_path} with min_sp={self.sampler.min_sp:.4f}")
 
                 else:
                     epochs_no_improve += 1
                 
                 if epochs_no_improve >= self.params.patience:
-                    print(f"Early stopping at epoch {epoch + 1}. Best Val F1: {f1_best:.4f}, Best Val Acc: {acc_best:.4f} (epoch {best_epoch})")
+                    print(f"Early stopping at epoch {epoch + 1}. Best Val Loss: {loss_best:.4f}, Best Val F1: {f1_best:.4f} (epoch {best_epoch})")
                     break
 
         # Load best model

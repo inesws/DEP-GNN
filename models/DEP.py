@@ -8,11 +8,11 @@ class DEP(nn.Module):
     def __init__(self, params, input_dim, output_dim):
         super(DEP, self).__init__()
         
-        self.alpha = params['alpha']
-        self.beta = params['beta']
-        self.lr = params['lr']
-        self.dropout = params['dropout']
-        self.min_sp = params['curr_sp']
+        self.alpha = params.alpha 
+        self.beta = params.beta
+        self.lr = params.lr
+        self.dropout = params.dropout
+        self.min_sp = params.curr_sp
         self.input_dim = input_dim # num_node_features 
         self.output_dim = output_dim
 

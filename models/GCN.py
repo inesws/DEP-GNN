@@ -32,10 +32,9 @@ class GCN(torch.nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.edge_dim = config['edge_attr']
-        self.activ_funct = getattr(pyg_nn, config['activ_funct'])
+        self.activ_funct = getattr(torch.nn, config['activ_funct'])()
         self.dropout = config['dropout']
         self.final_dropout = config['final_dropout']
-        #self.graph_pooling_type = config['graph_pooling_type']
         self.graph_pooling_type = getattr(pyg_nn, config['graph_pooling_type'])
 
 
@@ -90,12 +89,12 @@ class GCN(torch.nn.Module):
                 x = self.block(x, edge_index, edge_weight.abs())
 
         # 2. Readout layer
-        self._pooling_func = getattr(pyg_nn, self.graph_pooling_type)
+        #self._pooling_func = getattr(pyg_nn, self.graph_pooling_type)
 
-        x = self._pooling_func(x, batch)  # [batch_size, hidden_channels]
+        x = self.graph_pooling_type(x, batch)  # [batch_size, hidden_channels]
 
         # 3. Apply a final classifier
-        if self.final_dropout > 0:
+        if self.final_dropout != None:
             x = F.dropout(x, p=self.final_dropout, training=self.training)
         
         x = self.lin(x)
