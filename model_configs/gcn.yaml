@@ -1,6 +1,6 @@
 num_layers: [4]
 hidden_dim: [256]  # 
-edge_attr: [1]
+edge_attr: [null] # 1 or null for node-base
 dropout: [null] # write null or ~ for None
 activ_funct: ['ReLU'] # strings representing AF, ReLU, LeakyReLU, ELU, PReLU, etc
 final_dropout: [0.5]

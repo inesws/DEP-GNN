@@ -112,7 +112,7 @@ def main():
 
     """############ CRITICAL DEP SETTINGS############"""
 
-    ## freeze cbramod backbone:
+    ## freeze backbone:
     parser.add_argument('--freeze', type=bool,
                         default=False, help='freeze mode for DEP') 
     parser.add_argument('--use_pretrained_sampler', type=bool, default=False, 
@@ -121,7 +121,7 @@ def main():
                     default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth', 
                     help='path to pretrained DEP sampler checkpoint (includes weights and prune percentage)')
     parser.add_argument('--model_dir', type=str, 
-                    default='/home/isampaio/Desktop/Ines/DEPGNN/results/model1',
+                    default='/home/isampaio/Desktop/Ines/DEPGNN/results/model2',
                     help='directory to save trained models')
 
 
@@ -189,6 +189,10 @@ def main():
             'test': test_loader
         }
         
+        # Create directory if it doesn't exist
+        if not os.path.isdir(params.model_dir):
+            os.makedirs(params.model_dir)
+        
         # Initialize model and sampler
         model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
         sampler = DEP(params, node_feat_dim, output_dim)
@@ -243,6 +247,10 @@ def main():
                 folder_name = f"fold_{fold_num}"
             params.model_dir = os.path.join(original_model_dir, folder_name)
             
+            # Create directory if it doesn't exist
+            if not os.path.isdir(params.model_dir):
+                os.makedirs(params.model_dir)
+            
             # Train this fold
             results = train_one_fold(params, data_loaders, fold_model, fold_sampler)
             all_results.append(results)
@@ -272,6 +280,9 @@ def main():
             print("=" * 60)
             print(f"Best Val Accuracy:  {mean_results['best_val_acc']:.4f} ± {std_results['best_val_acc']:.4f}")
             print(f"Best Val F1:        {mean_results['best_val_f1']:.4f} ± {std_results['best_val_f1']:.4f}")
+            print(f"Best Val Precision: {mean_results['best_val_precision']:.4f} ± {std_results['best_val_precision']:.4f}")
+            print(f"Best Val Recall:    {mean_results['best_val_recall']:.4f} ± {std_results['best_val_recall']:.4f}")
+            print(f"Best Val AUC:       {mean_results['best_val_auc']:.4f} ± {std_results['best_val_auc']:.4f}")
             print(f"Best Val Loss:      {mean_results['best_val_loss']:.4f} ± {std_results['best_val_loss']:.4f}")
             print(f"\nTest Accuracy:      {mean_results['test_acc']:.4f} ± {std_results['test_acc']:.4f}")
             print(f"Test F1:            {mean_results['test_f1']:.4f} ± {std_results['test_f1']:.4f}")
@@ -281,6 +292,10 @@ def main():
             print(f"Test Loss:          {mean_results['test_loss']:.4f} ± {std_results['test_loss']:.4f}")
             if 'final_sparsity' in results_df.columns:
                 print(f"Final Sparsity:     {mean_results['final_sparsity']:.4f} ± {std_results['final_sparsity']:.4f}")
+            
+            # Create directory if it doesn't exist
+            if not os.path.isdir(original_model_dir):
+                os.makedirs(original_model_dir)
             
             # Save results to CSV
             results_save_path = os.path.join(original_model_dir, "kfold_results.csv")

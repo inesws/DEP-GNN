@@ -18,6 +18,7 @@ class DEP(nn.Module):
 
         self.weight_mask = nn.Parameter(torch.zeros(input_dim, input_dim)) 
         self.sig = nn.Sigmoid()
+        self.edge_mask = None  # binary edge-selection mask from last prune()
 
         self.reset_parameters()
 
@@ -98,6 +99,9 @@ class DEP(nn.Module):
 
         mask[sorted_indices] = False
 
+        # Store the binary mask internally
+        self.edge_mask = mask
+
         # Step 2: Filter edge_index and edge_attr using the mask
         filtered_edge_index = edge_ind_reshape[:, :, mask]
         filtered_edge_attr = x_reshape[:, mask]
@@ -115,3 +119,10 @@ class DEP(nn.Module):
         Method to return the current weight mask
         """
         return self.sym_weight_mask
+
+    def get_edge_mask(self):
+        """
+        Return the binary edge-selection mask from the last forward/prune call.
+        True = edge kept, False = edge pruned.
+        """
+        return self.edge_mask

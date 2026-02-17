@@ -526,6 +526,10 @@ class Trainer(object):
                     acc_best = v_acc
                     f1_best = v_f1
                     loss_best = v_loss
+                    precision_best = v_precision
+                    recall_best = v_recall
+                    auc_best = v_auc
+
 
                     self.best_model_states = {
                         'model': copy.deepcopy(self.model.state_dict()),
@@ -545,12 +549,12 @@ class Trainer(object):
 
                     # Save sampler with min_sp checkpoint
                     #sampler_path = self.params.model_dir + "/sampler_epoch{}_loss_{:.4f}.pth".format(best_epoch, loss_best)
-                    sampler_checkpoint = {
-                        'state_dict': self.sampler.state_dict(),
-                        'min_sp': self.sampler.min_sp,
-                        'epoch': best_epoch,
-                        'loss': loss_best
-                    }
+                    #sampler_checkpoint = {
+                    #    'state_dict': self.sampler.state_dict(),
+                    #    'min_sp': self.sampler.min_sp,
+                    #    'epoch': best_epoch,
+                    #    'loss': loss_best
+                    #}
                     #torch.save(sampler_checkpoint, sampler_path)
                     #print(f"DEP Sampler saved in {sampler_path} with min_sp={self.sampler.min_sp:.4f}")
 
@@ -609,6 +613,9 @@ class Trainer(object):
             'best_epoch': best_epoch,
             'best_val_acc': acc_best,
             'best_val_f1': f1_best,
+            'best_val_precision': precision_best,
+            'best_val_recall': recall_best,
+            'best_val_auc': auc_best,
             'best_val_loss': loss_best,
             'test_acc': test_acc,
             'test_f1': test_f1,
