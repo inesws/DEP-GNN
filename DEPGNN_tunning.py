@@ -5,6 +5,8 @@ import csv
 import itertools
 import random
 import os
+import shutil
+import time
 
 import numpy as np
 import pandas as pd
@@ -131,15 +133,13 @@ def save_combo_csv(path, combo_id, combo_dict):
         writer.writerow(row)
 
 
-def append_results_csv(path, combo_id, combo_dict, mean_results, std_results):
+def append_results_csv(path, combo_id, mean_results, std_results, total_time_sec):
     """Append one row (mean +/- std from k-fold) to the results CSV.
-    Includes val and test metrics. Test is saved for reference only
-    (model selection is based solely on val metrics).
+    Contains only combo_id, metrics, and total training time.
+    Hyperparameter values live in the separate combos CSV.
     """
     file_exists = os.path.isfile(path)
 
-    # Build ordered field names
-    hp_keys = sorted(combo_dict.keys())
     metric_keys = [
         'final_sparsity_mean', 'final_sparsity_std',
         'best_val_loss_mean', 'best_val_loss_std',
@@ -156,10 +156,9 @@ def append_results_csv(path, combo_id, combo_dict, mean_results, std_results):
         'test_auc_mean', 'test_auc_std',
         'jaccard_mean', 'jaccard_std',
     ]
-    fieldnames = ['combo_id'] + hp_keys + metric_keys
+    fieldnames = ['combo_id'] + metric_keys + ['total_time_sec']
 
-    row = {'combo_id': combo_id}
-    row.update(combo_dict)
+    row = {'combo_id': combo_id, 'total_time_sec': round(total_time_sec, 1)}
 
     for m in mean_results.index:
         row[f'{m}_mean'] = mean_results[m]
@@ -180,7 +179,7 @@ def main():
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 0)')
     parser.add_argument('--loss', type=str, default='CrossEntropyLoss', help='CrossEntropyLoss, BCEWithLogitsLoss')
     parser.add_argument('--y_dim', type=int, default=2, help='Num of classes,either categorical or one-hot: 2 for binary or 2+ for multiclass with CrossEntropyLoss, 1 for binary with BCEWithLogitsLoss')
-    parser.add_argument('--epochs', type=int, default=1000, help='number of epochs (default: 50)')
+    parser.add_argument('--epochs', type=int, default=2, help='number of epochs (default: 50)')
     parser.add_argument('--model_name', type=str, default='GCN', help='model name from model/<GNN_name>.py file')
     parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config file')
     parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
@@ -191,16 +190,16 @@ def main():
 
     """############ DEP Sampler  ############"""
     parser.add_argument('--alpha', type=float, default=[0.0001, 0.001, 0.01, 0.00001], nargs='+', help='alpha sparsity hyperparameter(s)')
-    parser.add_argument('--beta', type=float, default=[0.0001, 0.001, 0.01, 0.00001], nargs='+', help='beta sparsity hyperparameter(s)')
+    parser.add_argument('--beta', type=float, default=[0.0001, 0.001, 0.00001], nargs='+', help='beta sparsity hyperparameter(s)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
     parser.add_argument('--curr_sp', type=float, default=0.05, help='current sparsity level (default: 0.05)')
-    parser.add_argument('--iter_step', type=int, default=[4, 9], nargs='+', help='num epoch to increase sp level')
-    parser.add_argument('--prune_sp', type=float, default=[0.05, 0.1], nargs='+', help='incremental prunning sparsity')
-    parser.add_argument('--dropout', type=float, default=[0.0, 0.3, 0.5], nargs='+', help='dropout (use 0.0 for None)')
+    parser.add_argument('--iter_step', type=int, default=[4], nargs='+', help='num epoch to increase sp level')
+    parser.add_argument('--prune_sp', type=float, default=[0.05], nargs='+', help='incremental prunning sparsity')
+    parser.add_argument('--dropout', type=float, default=[0.5], nargs='+', help='dropout (use 0.0 for None)')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
-                        default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Sex',
+                        default='PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', 
                         help='name of the dataset folder to use?')
     parser.add_argument('--data_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
@@ -215,8 +214,11 @@ def main():
 
     """############ OUTPUT SETTINGS ############"""
     parser.add_argument('--model_dir', type=str,
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/tune_results/',
+                        default='/home/isampaio/Desktop/Ines/DEPGNN/results/tune_results/',
                         help='folder to save all tuning results (combos CSV, results CSV, best model)')
+    parser.add_argument('--disable_verb', type=bool,
+                        default=True,
+                        help='to not save models for all folds')
 
     ########## Parse parameters ####
 
@@ -301,6 +303,8 @@ def main():
         print(f"Training with {params.k_folds}-fold CV, {params.num_repeats} repeat(s)")
         print(f"Total training runs: {len(train_loaders)} (num_repeats x k_folds)")
 
+        combo_t_start = time.perf_counter()  # time the full k-fold for this combo
+
         all_results = []
         fold_binary_masks = []  # collect binary edge masks for Jaccard
         # Track the best individual fold within this combo (to save its weights)
@@ -329,20 +333,20 @@ def main():
             fold_model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
             fold_sampler = DEP(params, node_feat_dim, output_dim)
 
-            # Set fold-specific model_dir (Trainer auto-saves per-fold checkpoints here)
-            if params.num_repeats > 1:
-                folder_name = f"combo_{combo_id}_repeat{repeat_num}_fold{fold_num}"
-            else:
-                folder_name = f"combo_{combo_id}_fold_{fold_num}"
-            params.model_dir = os.path.join(root_dir, folder_name)
-
-            if not os.path.isdir(params.model_dir):
-                os.makedirs(params.model_dir)
+            # Point model_dir to a temp folder so Trainer can save there;
+            # we delete it afterwards to avoid 36×4 folders of .pth files.
+            tmp_fold_dir = os.path.join(root_dir, "_tmp_fold")
+            params.model_dir = tmp_fold_dir
 
             # Train
             setup_seed(params.seed)  # reset seed per fold for reproducibility
             results = train_one_fold(params, data_loaders, fold_model, fold_sampler)
             all_results.append(results)
+
+            # Clean up the per-fold .pth files saved by the Trainer
+            if params.disable_verb== True:
+                if os.path.isdir(tmp_fold_dir):
+                    shutil.rmtree(tmp_fold_dir)
 
             # After training, fold_model and fold_sampler hold the best-epoch
             # weights (restored by the Trainer).
@@ -358,9 +362,12 @@ def main():
                 best_fold_sampler_state = copy.deepcopy(fold_sampler.state_dict())
                 best_fold_sampler_min_sp = fold_sampler.min_sp
 
+        combo_elapsed = (time.perf_counter() - combo_t_start) / 60
+
         # --- Jaccard index across fold masks ---
         jaccard_mean, jaccard_std = compute_mean_jaccard(fold_binary_masks)
         print(f"Edge-mask Jaccard Index: {jaccard_mean:.4f} +/- {jaccard_std:.4f}")
+        print(f"Total k-fold training time: {combo_elapsed:.1f}min")
 
         # --- Aggregate k-fold results ---
         results_df = pd.DataFrame(all_results)
@@ -387,7 +394,7 @@ def main():
         print(f"Test Loss:          {mean_results['test_loss']:.4f} +/- {std_results['test_loss']:.4f}")
 
         # --- Append mean +/- std to the global tuning results CSV ---
-        append_results_csv(results_csv_path, combo_id, combo, mean_results, std_results)
+        append_results_csv(results_csv_path, combo_id, mean_results, std_results, combo_elapsed)
         print(f"Results appended to {results_csv_path}")
 
         # --- Save best model (selection based on mean val F1 only, NOT test) ---

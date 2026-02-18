@@ -1,7 +1,7 @@
-num_layers: [4]
-hidden_dim: [256]  # 
+num_layers: [3]
+hidden_dim: [128]  # 
 edge_attr: [null] # 1 or null for node-base
-dropout: [null] # write null or ~ for None
+dropout: [0.5] # write null or ~ for None
 activ_funct: ['ReLU'] # strings representing AF, ReLU, LeakyReLU, ELU, PReLU, etc
 final_dropout: [0.5]
 graph_pooling_type: [global_mean_pool]

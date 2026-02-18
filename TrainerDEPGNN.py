@@ -504,11 +504,11 @@ class Trainer(object):
                     # Adaptive step size based on current sparsity level
                     if current_edge_reduction >= 90 and current_edge_reduction < 99:
                         step = 0.01
-                    elif current_edge_reduction >= 99 and current_edge_reduction < 100:
+                    elif current_edge_reduction >= 99 and current_edge_reduction < 99.9:
                         step = 0.001
-                    elif current_edge_reduction >= 100:
-                        print(f"Maximum sparsity (100%) reached. Stopping pruning.")
-                        step = 0.0
+                    elif current_edge_reduction == 99.9:
+                        print(f"Maximum sparsity (99.9%) reached. Stopping pruning, it will train on these graphs until early stopping.")
+                        step = 0.0 # It will keep training until early stopping criteria is met, this bc the GNN could keep learning from these graphs.
                     else:
                         step = self.params.prune_sp  # Use default pruning step
                     
@@ -516,13 +516,17 @@ class Trainer(object):
                         with torch.no_grad():
                             old_min_sp = self.sampler.min_sp
                             self.sampler.update_prune(step) # this automatically updates sampler.min_sp
-                            print(f"Epoch {epoch + 1}: Updated pruning sparsity from {old_min_sp:.2f} to {self.sampler.min_sp:.2f} (edge reduction: {self.sampler.min_sp:.2f}%)")
+                            print(f"Epoch {epoch + 1}: Updated pruning sparsity from {old_min_sp:.2f} to {self.sampler.min_sp:.2f} (edge reduction: {self.sampler.min_sp*100:.1f}%)")
                 
                 # Save best model based on validation loss
-                if v_loss < loss_best: 
-                    print("Val Loss decreasing....saving weights !! ")
+                #if v_loss < loss_best: 
+                #   print("Val Loss decreasing....saving weights !! ")
+
+                if v_acc > acc_best:
+                    print("Val Acc increasing....saving weights !! ")
 
                     best_epoch = epoch + 1
+                    t_best_loss = np.mean(losses)
                     acc_best = v_acc
                     f1_best = v_f1
                     loss_best = v_loss
@@ -611,12 +615,13 @@ class Trainer(object):
         # Return comprehensive results
         results = {
             'best_epoch': best_epoch,
+            'best_train_loss': t_best_loss,
+            "best_val_loss": loss_best,
             'best_val_acc': acc_best,
             'best_val_f1': f1_best,
             'best_val_precision': precision_best,
             'best_val_recall': recall_best,
             'best_val_auc': auc_best,
-            'best_val_loss': loss_best,
             'test_acc': test_acc,
             'test_f1': test_f1,
             'test_precision': test_precision,
