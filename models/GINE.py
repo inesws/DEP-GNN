@@ -6,16 +6,6 @@ from torch import nn
 import torch_geometric
 import torch_geometric.nn as pyg_nn
 
-import torch_geometric.datasets as Datasets
-import torch_geometric.data as Data
-import torch_geometric.transforms as transforms
-from torch_geometric.utils import remove_self_loops
-
-import numpy as np
-import scipy as sp, scipy.io
-import pandas as pd
-import matplotlib.pyplot as plt
-
 from torch.nn import Linear, Softmax
 import torch.nn.functional as F
 from torch_geometric.nn import GINEConv
@@ -52,77 +42,41 @@ class xGINE(torch.nn.Module):
         self.graph_pooling_type = config['graph_pooling_type']
         self.train_eps = config['train_eps']
         self.edge_dim = config['edge_attr']
-        
-        self.eps_ = nn.Parameter(torch.zeros(config['num_layers']))
-        self.mlps_ = torch.nn.ModuleList()
+
+        # Independent GINEConv + BatchNorm per layer
+        self.convs = torch.nn.ModuleList()
         self.batch_norms_ = torch.nn.ModuleList()
-        #self.linears_predictions_ = torch.nn.ModuleList()
 
         for layer in range(self.num_layers):
-            if layer == 0:
-                self.mlps_.append(MLP(config, input_dim, config['hidden_dim']))
-            else:
-                self.mlps_.append(MLP(config, config['hidden_dim'], config['hidden_dim']))
-
+            in_dim = input_dim if layer == 0 else config['hidden_dim']
+            mlp = MLP(config, in_dim, config['hidden_dim'])
+            self.convs.append(GINEConv(mlp, train_eps=self.train_eps, edge_dim=self.edge_dim))
             self.batch_norms_.append(nn.BatchNorm1d(config['hidden_dim']))
-            #self.linears_prediction_.append(nn.Linear( config['hidden_dim'], output_dim))
 
-
-        self.gin0 = GINEConv(self.mlps_[0], train_eps=self.train_eps, edge_dim=self.edge_dim)
-        self.gin = GINEConv(self.mlps_[1], train_eps=self.train_eps, edge_dim=self.edge_dim)
         self.lin = Linear(config['hidden_dim'], output_dim)
 
 
-    def block(self, x, edge_index, layer_idx, edge_attr):
-        
-        x = self.gin(x, edge_index, edge_attr)
+    def forward(self, x, edge_index, batch, edge_attr):
 
-        x = self.batch_norms_[layer_idx](x)
+        edge_attr = edge_attr.unsqueeze(-1) if edge_attr.dim() == 1 else edge_attr
 
-        af = self.activ_funct
-        x = af(x)
-        
-        return x
-    
+        for conv, bn in zip(self.convs, self.batch_norms_):
+            x = conv(x, edge_index, edge_attr)
+            x = bn(x)
+            x = self.activ_funct(x)
 
-
-    def forward(self, x, edge_index,  batch, edge_attr):
-            
-
-        self.hidden_rep_ = []
-        
-        edge_attr = edge_attr.unsqueeze(-1)
-
-        x = self.gin0(x, edge_index, edge_attr)
-        x = self.batch_norms_[0](x)
-        af = self.activ_funct
-        x = af(x)
-
-        self.hidden_rep_.append(x)
-
-        hidden_layers = max(0, self.num_layers -1)
-
-        for layer_idx in range(hidden_layers):
-
-            x = self.block(x, edge_index, layer_idx+1, edge_attr)
-            self.hidden_rep_.append(x)
-
-
-        # 2. Readout layer
+        # Readout layer
         self._pooling_func = getattr(pyg_nn, self.graph_pooling_type)
+        x = self._pooling_func(x, batch)
 
-        x = self._pooling_func(x, batch)  # [batch_size, hidden_channels]
-
-        # 3. Apply a final classifier
+        # Final classifier
         if self.final_dropout > 0:
-
             x = F.dropout(x, p=self.final_dropout, training=self.training)
-        
+
         x = self.lin(x)
 
-
         return x
-    
+
 def compute_saliency(self, x, edge_index, batch, target_class=None):
     """
     Compute saliency map for the input with respect to a specific target class.
@@ -163,5 +117,3 @@ def compute_saliency(self, x, edge_index, batch, target_class=None):
     saliency = x.grad
 
     return saliency
-
-

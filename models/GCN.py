@@ -4,7 +4,7 @@ import torch
 import torch_geometric
 import torch_geometric.nn as pyg_nn
 
-from torch.nn import Linear
+from torch.nn import Linear, LayerNorm
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
@@ -37,66 +37,38 @@ class GCN(torch.nn.Module):
         self.final_dropout = config['final_dropout']
         self.graph_pooling_type = getattr(pyg_nn, config['graph_pooling_type'])
 
+        # Separate conv + LayerNorm per layer
+        self.convs = torch.nn.ModuleList()
+        self.layer_norms = torch.nn.ModuleList()
 
-        self.conv0 = GCNConv(input_dim, self.hidden_dim)
-        self.conv = GCNConv(self.hidden_dim, self.hidden_dim)
+        self.convs.append(GCNConv(input_dim, self.hidden_dim))
+        self.layer_norms.append(LayerNorm(input_dim))
+
+        for _ in range(max(0, self.num_layers - 1)):
+            self.convs.append(GCNConv(self.hidden_dim, self.hidden_dim))
+            self.layer_norms.append(LayerNorm(self.hidden_dim))
+
         self.lin = Linear(self.hidden_dim, output_dim)
-
-
-    def block(self, x, edge_index, edge_weight=None):
-
-        if edge_weight==None:
-            
-            x = self.conv(x, edge_index)
-
-        else:
-            x = self.conv(x, edge_index,  edge_weight.abs() )
-            
-        af = self.activ_funct
-        if self.dropout != None:
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = af(x)
-        
-        return x
 
 
     def forward(self, x, edge_index, batch, edge_weight=None):
 
+        ew = edge_weight.abs() if edge_weight is not None else None
 
-        if edge_weight==None:
-            x = self.conv0(x, edge_index)
+        for conv, ln in zip(self.convs, self.layer_norms):
+            x = ln(x)
+            x = conv(x, edge_index) if ew is None else conv(x, edge_index, ew)
+            if self.dropout is not None:
+                x = F.dropout(x, p=self.dropout, training=self.training)
+            x = self.activ_funct(x)
 
-        else:
-
-            x = self.conv0(x, edge_index, edge_weight.abs() ) # we apply sigmoid() to edge weight to ensure they are all positve and the plus of being normalized(?)
-        
-        if self.dropout != None:
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        af = self.activ_funct
-        x = af(x)
-        
-        hidden_layers = max(0, self.num_layers -1)
-
-        for _ in range(hidden_layers):
-
-            if edge_weight==None:
-                 
-                 x = self.block(x, edge_index)
-
-            else:
-
-                x = self.block(x, edge_index, edge_weight.abs())
-
-        # 2. Readout layer
-        #self._pooling_func = getattr(pyg_nn, self.graph_pooling_type)
-
+        # Readout layer
         x = self.graph_pooling_type(x, batch)  # [batch_size, hidden_channels]
 
-        # 3. Apply a final classifier
-        if self.final_dropout != None:
+        # Final classifier
+        if self.final_dropout is not None:
             x = F.dropout(x, p=self.final_dropout, training=self.training)
-        
+
         x = self.lin(x)
 
         return x
