@@ -179,7 +179,7 @@ def main():
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 0)')
     parser.add_argument('--loss', type=str, default='CrossEntropyLoss', help='CrossEntropyLoss, BCEWithLogitsLoss')
     parser.add_argument('--y_dim', type=int, default=2, help='Num of classes,either categorical or one-hot: 2 for binary or 2+ for multiclass with CrossEntropyLoss, 1 for binary with BCEWithLogitsLoss')
-    parser.add_argument('--epochs', type=int, default=2, help='number of epochs (default: 50)')
+    parser.add_argument('--epochs', type=int, default=200, help='number of epochs (default: 50)')
     parser.add_argument('--model_name', type=str, default='GCN', help='model name from model/<GNN_name>.py file')
     parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config file')
     parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
@@ -192,10 +192,10 @@ def main():
     parser.add_argument('--alpha', type=float, default=[0.0001, 0.001, 0.01, 0.00001], nargs='+', help='alpha sparsity hyperparameter(s)')
     parser.add_argument('--beta', type=float, default=[0.0001, 0.001, 0.00001], nargs='+', help='beta sparsity hyperparameter(s)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
-    parser.add_argument('--curr_sp', type=float, default=0.05, help='current sparsity level (default: 0.05)')
-    parser.add_argument('--iter_step', type=int, default=[4], nargs='+', help='num epoch to increase sp level')
-    parser.add_argument('--prune_sp', type=float, default=[0.05], nargs='+', help='incremental prunning sparsity')
-    parser.add_argument('--dropout', type=float, default=[0.5], nargs='+', help='dropout (use 0.0 for None)')
+    parser.add_argument('--curr_sp', type=float, default=0.0, help='current sparsity level (default: 0.05)')
+    parser.add_argument('--iter_step', type=int, default=5,  help='num epoch to increase sp level') # nargs='+',
+    parser.add_argument('--prune_sp', type=float, default=0.05, help='incremental prunning sparsity')
+    parser.add_argument('--dropout', type=float, default=0.5, help='dropout (use 0.0 for None)')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
@@ -206,8 +206,8 @@ def main():
                         help='datasets_dir')
     parser.add_argument('--split', type=float,
                         nargs='+',
-                        default=[0.8, 0.1, 0.1],
-                        help='Train/val/test proportions, e.g.,--split 0.9 0.1 0 --split 0.8 0.1 0.1')
+                        default=[0.8, 0.2],
+                        help='Train/val/test proportions, e.g., for k fold set only train and test --split 0.9 0.1 0 / for holdout method --split 0.8 0.1 0.1')
     parser.add_argument('--num_repeats', type=int, default=1, help='num of repeats for k-fold (default: 1)')
     parser.add_argument('--k_folds', type=int, default=4, help='num of k folds (default: 4)')
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader')

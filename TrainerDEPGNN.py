@@ -498,7 +498,7 @@ class Trainer(object):
                 )
                 
                 # Progressive pruning: increase sparsity every iter_step epochs
-                if (epoch % self.params.iter_step == 0) and (epoch != 0) and not self.params.freeze:
+                if ((epoch + 1) % self.params.iter_step == 0) and not self.params.freeze:
                     current_edge_reduction = self.sampler.min_sp * 100  # Convert to percentage
                     
                     # Adaptive step size based on current sparsity level
