@@ -18,7 +18,7 @@ class TrainerGNN(object):
 
         self.model = model.cuda()
 
-        if params.loss == 'CrossEntropy':
+        if params.loss == 'CrossEntropyLoss':
             self.criterion = CrossEntropyLoss().cuda()
         else:
             self.criterion = BCEWithLogitsLoss().cuda()
@@ -30,6 +30,12 @@ class TrainerGNN(object):
         
         # Create optimizer
         if self.params.optimizer == 'Adam':
+            if params.weight_decay is not None:
+                self.optimizer = torch.optim.Adam(model_params, lr=self.params.lr,
+                                                  weight_decay=self.params.weight_decay)
+            else: 
+                self.optimizer = torch.optim.Adam(model_params, lr=self.params.lr)
+        else:
             if params.weight_decay is not None:
                 self.optimizer = torch.optim.AdamW(model_params, lr=self.params.lr,
                                                    weight_decay=self.params.weight_decay)
@@ -212,9 +218,8 @@ class TrainerGNN(object):
             
             # Calculate loss based on loss type
             if self.params.loss == 'CrossEntropyLoss':
-                # Multi-class: use one-hot encoded labels
-                labels = torch.nn.functional.one_hot(data.y, num_classes=out.shape[1])
-                loss = self.criterion(out, labels.float())
+                # Multi-class: CrossEntropyLoss expects class indices (LongTensor)
+                loss = self.criterion(out, data.y)
             else:
                 # Binary: BCEWithLogitsLoss expects raw logits and float labels
                 loss = self.criterion(out.squeeze(), data.y.float())
@@ -284,9 +289,8 @@ class TrainerGNN(object):
                 
                 # Get labels
                 if self.params.loss == 'CrossEntropyLoss':
-                    # Multi-class: use one-hot encoded labels
-                    labels = torch.nn.functional.one_hot(data.y, num_classes=out.shape[1])
-                    loss = self.criterion(out, labels.float())
+                    # Multi-class: CrossEntropyLoss expects class indices (LongTensor)
+                    loss = self.criterion(out, data.y)
                 else:
                     # Binary: BCEWithLogitsLoss expects raw logits and float labels
                     loss = self.criterion(out.squeeze(), data.y.float())
@@ -369,9 +373,13 @@ class TrainerGNN(object):
                     print("Val F1 improving....saving weights !! ")
 
                     best_epoch = epoch + 1
+                    t_best_loss = np.mean(losses)
                     acc_best = v_acc
                     f1_best = v_f1
                     loss_best = v_loss
+                    precision_best = v_precision
+                    recall_best = v_recall
+                    auc_best = v_auc
 
                     self.best_model_states = copy.deepcopy(self.model.state_dict())
 
@@ -426,9 +434,13 @@ class TrainerGNN(object):
         # Return comprehensive results
         results = {
             'best_epoch': best_epoch,
+            'best_train_loss': t_best_loss,
+            'best_val_loss': loss_best,
             'best_val_acc': acc_best,
             'best_val_f1': f1_best,
-            'best_val_loss': loss_best,
+            'best_val_precision': precision_best,
+            'best_val_recall': recall_best,
+            'best_val_auc': auc_best,
             'test_acc': test_acc,
             'test_f1': test_f1,
             'test_precision': test_precision,

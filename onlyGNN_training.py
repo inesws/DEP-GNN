@@ -1,9 +1,14 @@
-
 import argparse
+import copy
+import csv
+import itertools
 import random
 import os
+import shutil
+import time
 
 import numpy as np
+import pandas as pd
 import torch
 import sys
 from pathlib import Path
@@ -24,7 +29,7 @@ import utils
 from utils.customDataset import BrainGraphDataset
 from utils.kFoldDataLoader import KFold_DataLoader
 from utils.model_utils import read_yaml
-from utils.dataset_utils import adjust_labels
+from utils.dataset_utils import adjust_labels, find_output_dim
 
 # Model
 sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', 'models'))
@@ -46,43 +51,119 @@ def train_one_fold(params, data_loaders, model):
     return results
 
 
+def build_grid(params_namespace):
+    """
+    Inspect every attribute of the parsed params.  If the default value is a
+    list, treat it as a set of candidate values for grid-search.  Scalar
+    defaults are kept fixed.  Returns:
+        grid_keys  – list of arg names that vary
+        grid_combos – list[dict] with every combination
+        fixed_params – dict of arg names with fixed (scalar) values
+    """
+    grid_axes = {}
+    fixed_params = {}
+
+    for key, value in vars(params_namespace).items():
+        if isinstance(value, list) and key != 'split':   # split is a real list arg
+            grid_axes[key] = value
+        else:
+            fixed_params[key] = value
+
+    grid_keys = sorted(grid_axes.keys())
+    grid_values = [grid_axes[k] for k in grid_keys]
+    grid_combos = [dict(zip(grid_keys, combo))
+                   for combo in itertools.product(*grid_values)]
+
+    return grid_keys, grid_combos, fixed_params
+
+
+def save_combo_csv(path, combo_id, combo_dict):
+    """Append one row to the hyperparameter-combinations CSV."""
+    file_exists = os.path.isfile(path)
+    fieldnames = ['combo_id'] + sorted(combo_dict.keys())
+    with open(path, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        row = {'combo_id': combo_id}
+        row.update(combo_dict)
+        writer.writerow(row)
+
+
+def append_results_csv(path, combo_id, mean_results, std_results, total_time_sec):
+    """Append one row (mean +/- std from k-fold) to the results CSV."""
+    file_exists = os.path.isfile(path)
+
+    metric_keys = [
+        'best_epoch_mean', 'best_epoch_std',
+        'best_val_loss_mean', 'best_val_loss_std',
+        'best_val_acc_mean', 'best_val_acc_std',
+        'best_val_f1_mean', 'best_val_f1_std',
+        'best_val_precision_mean', 'best_val_precision_std',
+        'best_val_recall_mean', 'best_val_recall_std',
+        'best_val_auc_mean', 'best_val_auc_std',
+        'test_loss_mean', 'test_loss_std',
+        'test_acc_mean', 'test_acc_std',
+        'test_f1_mean', 'test_f1_std',
+        'test_precision_mean', 'test_precision_std',
+        'test_recall_mean', 'test_recall_std',
+        'test_auc_mean', 'test_auc_std',
+    ]
+    fieldnames = ['combo_id'] + metric_keys + ['total_time_sec']
+
+    row = {'combo_id': combo_id, 'total_time_sec': round(total_time_sec, 1)}
+
+    for m in mean_results.index:
+        row[f'{m}_mean'] = mean_results[m]
+        row[f'{m}_std'] = std_results[m]
+
+    with open(path, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def main():
 
-    """############ GNN Model Training ############"""
-    parser = argparse.ArgumentParser(description='DEP-GNN Training')
-    parser.add_argument('--seed', type=int, default=42, help='random seed (default: 3407)')
+    """############ GNN Model Training (no DEP sampler) ############"""
+    parser = argparse.ArgumentParser(description='GNN-only Hyperparameter Tuning (Grid Search)')
+    parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 0)')
     parser.add_argument('--loss', type=str, default='CrossEntropyLoss', help='CrossEntropyLoss, BCEWithLogitsLoss')
-    parser.add_argument('--epochs', type=int, default=1000, help='number of epochs (default: 50)')
+    parser.add_argument('--y_dim', type=int, default=2, help='Num of classes: 2+ for CrossEntropyLoss, 1 for BCEWithLogitsLoss')
+    parser.add_argument('--epochs', type=int, default=200, help='number of epochs (default: 200)')
     parser.add_argument('--model_name', type=str, default='GCN', help='model name from model/<GNN_name>.py file')
-    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/config_GCN', help='model config files')
-    parser.add_argument('--patience', type=int, default=10, help='num of epochs patience for early_stopping (default: 10)')
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 128)')
-    parser.add_argument('--lr', type=float, default=0.001, help='learning rate (default: 1e-3)')
-    parser.add_argument('--weight_decay', type=float, default=None, help='weight decay (default: 5e-2)')
-    parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer AdamW,(Adam)')
-    parser.add_argument('--dropout', type=float, default=0.5, help='dropout, 0=None')
-    parser.add_argument('--model_dir', type=str, 
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/noSampler_results/',
-                        help='directory to save trained models')
+    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config file')
+    parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 50)')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 16)')
+    parser.add_argument('--lr', type=float, default=[0.0001], nargs='+', help='learning rate(s) for grid search')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='weight decay (default: None)')
+    parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer AdamW or Adam')
+    parser.add_argument('--dropout', type=float, default=0.5, help='dropout (use 0.0 for None)')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
-                        default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Handedness_class',
+                        default='PearC_EdgeW_PearC_Sp30_raw_Sex',
                         help='name of the dataset folder to use?')
-    
     parser.add_argument('--data_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
-                        help='datasets_dir') # full_ccd_r1_to_11_nor5_challenge_1.pkl , train_ccd_r1_to_r11_nor5_challenge_2.pkl
-    parser.add_argument('--split', type=float, # TH
-                        nargs= '+',
-                        default=[0.8, 0.1, 0.1],
-                        help='Train/val/test proportions, e.g.,--split 0.9 0.1 0 --split 0.8 0.1 0.1')
+                        help='datasets_dir')
+    parser.add_argument('--split', type=float,
+                        nargs='+',
+                        default=[0.8, 0.2],
+                        help='Train/val/test proportions, e.g., --split 0.8 0.2')
     parser.add_argument('--num_repeats', type=int, default=1, help='num of repeats for k-fold (default: 1)')
-    parser.add_argument('--k_folds',type=int, default= 4, help='num of k folds (default: 4)')
-    parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader') # to be used in data_loaders
+    parser.add_argument('--k_folds', type=int, default=4, help='num of k folds (default: 4)')
+    parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader')
 
-
+    """############ OUTPUT SETTINGS ############"""
+    parser.add_argument('--model_dir', type=str,
+                        default='/home/isampaio/Desktop/Ines/DEPGNN/results/noSampler_results/',
+                        help='folder to save all tuning results (combos CSV, results CSV, best model)')
+    parser.add_argument('--disable_verb', type=bool,
+                        default=True,
+                        help='to not save models for all folds')
 
     ########## Parse parameters ####
 
@@ -90,40 +171,28 @@ def main():
     print(params)
     setup_seed(params.seed)
 
-    #### Dataset #####
-    #  Split Data: 0.8 kfold( Train, Val) | 0.2 Test
-
-    hdf5_path =os.path.join(params.data_dir, f"{params.dataset_name}.h5") 
+    #### Dataset  (loaded once, shared across all combos) #####
+    hdf5_path = os.path.join(params.data_dir, f"{params.dataset_name}.h5")
     dataset_dir = os.path.join(params.data_dir, f"{params.dataset_name}_Dataset")
-    #dataset = BrainGraphDataset(root=Path(dataset_dir), hdf5_path=hdf5_path,pre_transform=adjust_labels )
     dataset = BrainGraphDataset(root=Path(dataset_dir), hdf5_path=hdf5_path)
 
-    train_size = int(len(dataset)*params.split[0])
+    train_size = int(len(dataset) * params.split[0])
 
     dataset = dataset.shuffle()
-    train_dataset = dataset[:train_size] # if train is 0.8 then test is 0.2 
-    test_dataset = dataset[train_size:]
+    train_dataset = dataset[:train_size]   # k-fold is performed on this portion
+    test_dataset = dataset[train_size:]    # held-out test set
 
-    # Create k-fold loaders or single split
-    if params.num_repeats == 1 and params.k_folds == 1:
-        # Single train/val split (no k-fold)
-        val_size = int(len(train_dataset) * params.split[1])
-        val_dataset = train_dataset[val_size:]
-        train_dataset = train_dataset[:val_size]
-        
-        train_loaders = [DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True)]
-        val_loaders = [DataLoader(val_dataset, batch_size=params.batch_size, shuffle=False)]
-    else:
-        # K-fold cross-validation
-        sfk = KFold_DataLoader(params, stratify=True)
-        train_loaders, val_loaders = sfk.get_nk_loaders(train_dataset)
+    # k-fold loaders (built once; same splits for every combo)
+    sfk = KFold_DataLoader(params, stratify=True)
+    train_loaders, val_loaders = sfk.get_nk_loaders(train_dataset)
 
+    # Test loader (same for all folds / combos)
     test_loader = DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False)
 
     #### Model Setup #####
     node_feat_dim = dataset.num_node_features
-    output_dim = len(dataset[0].y.shape) + 2
-    
+    output_dim = params.y_dim
+
     # Import model class
     import importlib
     module_name = params.model_name
@@ -131,120 +200,164 @@ def main():
     ModelClass = getattr(module, module_name)
     model_config = read_yaml(params.model_config)[0]
 
-    #### Train!!! #####
-    original_model_dir = params.model_dir
-    
-    if params.num_repeats == 1 and params.k_folds == 1:
-        # Single train/val split - no k-fold
-        print("=" * 60)
-        print("Training with single train/val split (no k-fold)")
-        print("=" * 60)
-        
-        data_loaders = {
-            'train': train_loaders[0],
-            'val': val_loaders[0],
-            'test': test_loader
-        }
-        
-        # Initialize model and sampler
-        model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
-        
-        # Train
-        results = train_one_fold(params, data_loaders, model)
-        
-    else:
-        # K-fold cross-validation
-        # Note: num_repeats * k_folds = total number of training runs
-        # e.g., num_repeats=2, k_folds=4 → 8 total folds
-        print("=" * 60)
+    #### Build grid of hyperparameter combos #####
+    grid_keys, grid_combos, fixed_params = build_grid(params)
+    n_combos = len(grid_combos)
+
+    print("\n" + "=" * 60)
+    print(f"Grid Search: {n_combos} hyperparameter combinations")
+    print(f"Varying parameters: {grid_keys}")
+    print("=" * 60)
+
+    # ---- Output folder (single folder for all 3 files) ----
+    root_dir = params.model_dir
+    if not os.path.isdir(root_dir):
+        os.makedirs(root_dir)
+
+    combos_csv_path  = os.path.join(root_dir, "hyperparameter_combos.csv")  # File 1
+    results_csv_path = os.path.join(root_dir, "tuning_results.csv")         # File 2
+    best_model_path  = os.path.join(root_dir, "best_model.pth")             # File 3
+
+    # ---- Global best tracker (selection based on mean val F1 only) ----
+    best_mean_val_f1 = -1.0
+    best_combo_id = None
+
+    #### Iterate over all combos #####
+    for combo_id, combo in enumerate(grid_combos, start=1):
+        print("\n" + "#" * 70)
+        print(f"  COMBO {combo_id}/{n_combos}:  {combo}")
+        print("#" * 70)
+
+        # --- Apply this combo's hyper-params to params ---
+        for key, value in combo.items():
+            if key == 'dropout' and value == 0.0:
+                setattr(params, key, None)
+            else:
+                setattr(params, key, value)
+
+        # --- Save this combo to CSV ---
+        save_combo_csv(combos_csv_path, combo_id, combo)
+
+        # --- k-fold CV ---
         print(f"Training with {params.k_folds}-fold CV, {params.num_repeats} repeat(s)")
-        print(f"Total training runs: {len(train_loaders)} (num_repeats × k_folds)")
-        print("=" * 60)
-        
+        print(f"Total training runs: {len(train_loaders)} (num_repeats x k_folds)")
+
+        combo_t_start = time.perf_counter()
+
         all_results = []
-        
+        best_fold_val_f1 = -1.0
+        best_fold_model_state = None
+
         for fold_idx, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
-            # Determine repeat and fold numbers for clarity
             repeat_num = (fold_idx // params.k_folds) + 1
             fold_num = (fold_idx % params.k_folds) + 1
-            
+
             print(f"\n{'=' * 60}")
-            print(f"Repeat {repeat_num}/{params.num_repeats}, Fold {fold_num}/{params.k_folds} (Run {fold_idx + 1}/{len(train_loaders)})")
+            print(f"Combo {combo_id} | Repeat {repeat_num}/{params.num_repeats}, "
+                  f"Fold {fold_num}/{params.k_folds} (Run {fold_idx + 1}/{len(train_loaders)})")
             print("=" * 60)
-            
-            # Create data loaders for this fold
+
             data_loaders = {
                 'train': train_loader,
                 'val': val_loader,
-                'test': test_loader
+                'test': test_loader,
             }
-            
-            # Reinitialize model and sampler for each fold (fresh start)
+
+            # Reinitialize model for each fold (fresh start)
             fold_model = ModelClass(config=model_config, input_dim=node_feat_dim, output_dim=output_dim)
 
-            # Update model_dir to save fold-specific models
-            # Include repeat number if multiple repeats
-            if params.num_repeats > 1:
-                folder_name = f"repeat{repeat_num}_fold{fold_num}"
-            else:
-                folder_name = f"fold_{fold_num}"
-            params.model_dir = os.path.join(original_model_dir, folder_name)
-            
-            # Train this fold
+            # Point model_dir to a temp folder so Trainer can save there
+            tmp_fold_dir = os.path.join(root_dir, "_tmp_fold")
+            params.model_dir = tmp_fold_dir
+
+            # Train
+            setup_seed(params.seed)
             results = train_one_fold(params, data_loaders, fold_model)
             all_results.append(results)
-            
-            # Restore original model_dir
-            params.model_dir = original_model_dir
-        
-        # Print summary of all folds
-        print("\n" + "=" * 60)
-        print("K-Fold Cross-Validation Summary")
-        print("=" * 60)
-        print(f"Completed {len(all_results)} folds")
-        
-        # Calculate mean and std across all folds
-        if all_results:
-            import pandas as pd
-            
-            # Convert results to DataFrame for easy aggregation
-            results_df = pd.DataFrame(all_results)
-            
-            # Calculate statistics
-            mean_results = results_df.mean()
-            std_results = results_df.std()
-            
-            print("\n" + "=" * 60)
-            print("Aggregated K-Fold Results (Mean ± Std)")
-            print("=" * 60)
-            print(f"Best Val Accuracy:  {mean_results['best_val_acc']:.4f} ± {std_results['best_val_acc']:.4f}")
-            print(f"Best Val F1:        {mean_results['best_val_f1']:.4f} ± {std_results['best_val_f1']:.4f}")
-            print(f"Best Val Loss:      {mean_results['best_val_loss']:.4f} ± {std_results['best_val_loss']:.4f}")
-            print(f"\nTest Accuracy:      {mean_results['test_acc']:.4f} ± {std_results['test_acc']:.4f}")
-            print(f"Test F1:            {mean_results['test_f1']:.4f} ± {std_results['test_f1']:.4f}")
-            print(f"Test Precision:     {mean_results['test_precision']:.4f} ± {std_results['test_precision']:.4f}")
-            print(f"Test Recall:        {mean_results['test_recall']:.4f} ± {std_results['test_recall']:.4f}")
-            print(f"Test AUC:           {mean_results['test_auc']:.4f} ± {std_results['test_auc']:.4f}")
-            print(f"Test Loss:          {mean_results['test_loss']:.4f} ± {std_results['test_loss']:.4f}")
-            
-            # Save results to CSV
-            results_save_path = os.path.join(original_model_dir, "kfold_results.csv")
-            results_df.to_csv(results_save_path, index=False)
-            print(f"\nDetailed results saved to: {results_save_path}")
-            
-            # Save summary statistics
-            summary_save_path = os.path.join(original_model_dir, "kfold_summary.csv")
-            summary_df = pd.DataFrame({
-                'metric': results_df.columns,
-                'mean': mean_results.values,
-                'std': std_results.values
-            })
-            summary_df.to_csv(summary_save_path, index=False)
-            print(f"Summary statistics saved to: {summary_save_path}")
 
-    print('\n' + "=" * 60)
-    print('Training Complete!')
-    print("=" * 60)
+            # Clean up the per-fold .pth files
+            if params.disable_verb == True:
+                if os.path.isdir(tmp_fold_dir):
+                    shutil.rmtree(tmp_fold_dir)
+
+            # Keep the best fold's weights
+            if results['best_val_f1'] > best_fold_val_f1:
+                best_fold_val_f1 = results['best_val_f1']
+                best_fold_model_state = copy.deepcopy(fold_model.state_dict())
+
+        combo_elapsed = (time.perf_counter() - combo_t_start) / 60
+        print(f"Total k-fold training time: {combo_elapsed:.1f}min")
+
+        # --- Aggregate k-fold results ---
+        results_df = pd.DataFrame(all_results)
+        mean_results = results_df.mean()
+        std_results = results_df.std()
+
+        print("\n" + "=" * 60)
+        print(f"K-Fold Summary for Combo {combo_id}")
+        print("=" * 60)
+        print(f"Best Epoch:         {mean_results['best_epoch']:.1f} +/- {std_results['best_epoch']:.1f}")
+        print(f"Best Val Loss:      {mean_results['best_val_loss']:.4f} +/- {std_results['best_val_loss']:.4f}")
+        print(f"Best Val Accuracy:  {mean_results['best_val_acc']:.4f} +/- {std_results['best_val_acc']:.4f}")
+        print(f"Best Val F1:        {mean_results['best_val_f1']:.4f} +/- {std_results['best_val_f1']:.4f}")
+        print(f"Best Val Precision: {mean_results['best_val_precision']:.4f} +/- {std_results['best_val_precision']:.4f}")
+        print(f"Best Val Recall:    {mean_results['best_val_recall']:.4f} +/- {std_results['best_val_recall']:.4f}")
+        print(f"Best Val AUC:       {mean_results['best_val_auc']:.4f} +/- {std_results['best_val_auc']:.4f}")
+        print(f"\nTest Accuracy:      {mean_results['test_acc']:.4f} +/- {std_results['test_acc']:.4f}")
+        print(f"Test F1:            {mean_results['test_f1']:.4f} +/- {std_results['test_f1']:.4f}")
+        print(f"Test Loss:          {mean_results['test_loss']:.4f} +/- {std_results['test_loss']:.4f}")
+
+        # --- Append mean +/- std to the global tuning results CSV ---
+        append_results_csv(results_csv_path, combo_id, mean_results, std_results, combo_elapsed)
+        print(f"Results appended to {results_csv_path}")
+
+        # --- Save best model (selection based on mean val F1 only, NOT test) ---
+        current_mean_val_f1 = mean_results['best_val_f1']
+        if current_mean_val_f1 > best_mean_val_f1:
+            best_mean_val_f1 = current_mean_val_f1
+            best_combo_id = combo_id
+
+            checkpoint = {
+                'model_state_dict': best_fold_model_state,
+                'combo_id': combo_id,
+                'combo_params': combo,
+                'mean_val_f1': float(mean_results['best_val_f1']),
+                'std_val_f1': float(std_results['best_val_f1']),
+                'mean_val_acc': float(mean_results['best_val_acc']),
+                'mean_val_loss': float(mean_results['best_val_loss']),
+                'mean_test_f1': float(mean_results['test_f1']),
+                'mean_test_acc': float(mean_results['test_acc']),
+            }
+            torch.save(checkpoint, best_model_path)
+            print(f"*** New best model saved! combo_id={combo_id}, "
+                  f"mean_val_F1={current_mean_val_f1:.4f} ***")
+        else:
+            print(f"No improvement (current mean val F1 {current_mean_val_f1:.4f} "
+                  f"<= best {best_mean_val_f1:.4f} from combo {best_combo_id})")
+
+    # --- Final summary ---
+    print("\n" + "#" * 70)
+    print(f"Grid Search Complete!  {n_combos} combos evaluated.")
+    print(f"Output folder:         {root_dir}")
+    print(f"  1) Hyperparameter combos: {combos_csv_path}")
+    print(f"  2) Tuning results:        {results_csv_path}")
+    print(f"  3) Best model checkpoint: {best_model_path}")
+    print("#" * 70)
+
+    # Print the best combo by val F1
+    if os.path.isfile(results_csv_path):
+        summary = pd.read_csv(results_csv_path)
+        if os.path.isfile(combos_csv_path):
+            combos_df = pd.read_csv(combos_csv_path)
+            summary = summary.merge(combos_df, on='combo_id', how='left')
+        best_row = summary.loc[summary['best_val_f1_mean'].idxmax()]
+        print(f"\nBest combo (by mean val F1): combo_id={int(best_row['combo_id'])}")
+        for k in grid_keys:
+            print(f"  {k}: {best_row[k]}")
+        print(f"  Best Epoch: {best_row['best_epoch_mean']:.1f} +/- {best_row['best_epoch_std']:.1f}")
+        print(f"  Val F1:  {best_row['best_val_f1_mean']:.4f} +/- {best_row['best_val_f1_std']:.4f}")
+        print(f"  Test F1: {best_row['test_f1_mean']:.4f} +/- {best_row['test_f1_std']:.4f}  (not used for selection)")
+
 
 if __name__ == '__main__':
     main()

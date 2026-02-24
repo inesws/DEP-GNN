@@ -8,7 +8,7 @@ from torch.nn import  MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
 from tqdm import tqdm
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, confusion_matrix
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CosineAnnealingLR
 
 
 class Trainer(object):
@@ -103,9 +103,13 @@ class Trainer(object):
                 else: 
                         self.optimizer = torch.optim.AdamW(all_params, lr=self.params.lr)
 
-                
-                                             
-        
+        # Create LR scheduler (CosineAnnealingLR when using AdamW)
+        if self.params.optimizer != 'Adam':
+            self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.params.epochs, eta_min=1e-6)
+            print(f'Using CosineAnnealingLR scheduler (T_max={self.params.epochs}, eta_min=1e-6)')
+        else:
+            self.scheduler = None
+
         print(self.model)
 
     def get_metrics_for_regression(self, data_loader, model):
@@ -310,9 +314,8 @@ class Trainer(object):
             
             # Calculate loss based on loss type
             if self.params.loss == 'CrossEntropyLoss':
-                # Multi-class: use one-hot encoded labels
-                labels = torch.nn.functional.one_hot(data.y, num_classes=out.shape[1])
-                loss = self.criterion(out, labels.float())
+                # Multi-class: CrossEntropyLoss expects class indices (LongTensor)
+                loss = self.criterion(out, data.y)
             else:
                 # Binary: BCEWithLogitsLoss expects raw logits and float labels
                 # out shape: [batch_size, 1] or [batch_size]
@@ -403,9 +406,8 @@ class Trainer(object):
                 
                 # Get labels
                 if self.params.loss == 'CrossEntropyLoss':
-                    # Multi-class: use one-hot encoded labels
-                    labels = torch.nn.functional.one_hot(data.y, num_classes=out.shape[1])
-                    loss_clf = self.criterion(out, labels.float())
+                    # Multi-class: CrossEntropyLoss expects class indices (LongTensor)
+                    loss_clf = self.criterion(out, data.y)
                 else:
                     # Binary: BCEWithLogitsLoss expects raw logits and float labels
                     loss_clf = self.criterion(out.squeeze(), data.y.float())
@@ -424,6 +426,10 @@ class Trainer(object):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
                 
                 self.optimizer.step()
+
+            # Step the LR scheduler at the end of each epoch
+            if self.scheduler is not None:
+                self.scheduler.step()
 
             optim_state = self.optimizer.state_dict()
 
@@ -631,4 +637,4 @@ class Trainer(object):
             'final_sparsity': self.sampler.min_sp
         }
         
-        return results
+        return results, self.sampler, self.model

@@ -1,5 +1,5 @@
-num_layers: [3]
-hidden_dim: [128]  # 
+num_layers: [2]
+hidden_dim: [32]  # 
 edge_attr: [null] # 1 or null for node-base
 dropout: [0.5] # write null or ~ for None
 activ_funct: ['ReLU'] # strings representing AF, ReLU, LeakyReLU, ELU, PReLU, etc

@@ -48,8 +48,8 @@ def setup_seed(seed):
 def train_one_fold(params, data_loaders, model, sampler):
     """Train a single fold or single run"""
     trainer = Trainer(params, data_loaders, model, sampler)
-    results = trainer.train_for_classification()
-    return results
+    results, sampler, model = trainer.train_for_classification()
+    return results, sampler, model
 
 
 def build_grid(params_namespace):
@@ -141,6 +141,7 @@ def append_results_csv(path, combo_id, mean_results, std_results, total_time_sec
     file_exists = os.path.isfile(path)
 
     metric_keys = [
+        'best_epoch_mean', 'best_epoch_std',
         'final_sparsity_mean', 'final_sparsity_std',
         'best_val_loss_mean', 'best_val_loss_std',
         'best_val_acc_mean', 'best_val_acc_std',
@@ -184,13 +185,13 @@ def main():
     parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config file')
     parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 128)')
-    parser.add_argument('--lr', type=float, default=[0.001, 0.00001, 0.0001], nargs='+', help='learning rate(s) for grid search')
-    parser.add_argument('--weight_decay', type=float, default=None, help='weight decay (default: 5e-2)')
-    parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer AdamW,(Adam)')
+    parser.add_argument('--lr', type=float, default=[0.0001,0.001, 0.00001], nargs='+', help='learning rate(s) for grid search')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='weight decay (default: 5e-2)')
+    parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer AdamW,(Adam)')
 
     """############ DEP Sampler  ############"""
-    parser.add_argument('--alpha', type=float, default=[0.0001, 0.001, 0.01, 0.00001], nargs='+', help='alpha sparsity hyperparameter(s)')
-    parser.add_argument('--beta', type=float, default=[0.0001, 0.001, 0.00001], nargs='+', help='beta sparsity hyperparameter(s)')
+    parser.add_argument('--alpha', type=float, default=[0.0001, 0.001, 0.00001], nargs='+', help='alpha sparsity hyperparameter(s)')
+    parser.add_argument('--beta', type=float, default=[0.0001, 0.00001, 0.000001], nargs='+', help='beta sparsity hyperparameter(s)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
     parser.add_argument('--curr_sp', type=float, default=0.0, help='current sparsity level (default: 0.05)')
     parser.add_argument('--iter_step', type=int, default=5,  help='num epoch to increase sp level') # nargs='+',
@@ -199,7 +200,7 @@ def main():
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
-                        default='PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', 
+                        default= 'PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', #'PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', 
                         help='name of the dataset folder to use?')
     parser.add_argument('--data_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
@@ -340,7 +341,7 @@ def main():
 
             # Train
             setup_seed(params.seed)  # reset seed per fold for reproducibility
-            results = train_one_fold(params, data_loaders, fold_model, fold_sampler)
+            results, sampler, model = train_one_fold(params, data_loaders, fold_model, fold_sampler)
             all_results.append(results)
 
             # Clean up the per-fold .pth files saved by the Trainer
@@ -352,7 +353,7 @@ def main():
             # weights (restored by the Trainer).
             # Run one forward pass to populate sampler.edge_mask with the
             # correct binary mask for the restored weights + current min_sp
-            binary_mask = extract_binary_mask(fold_sampler, train_loader)
+            binary_mask = extract_binary_mask(sampler, train_loader)
             fold_binary_masks.append(binary_mask)
 
             # Keep the best fold's weights.
@@ -381,6 +382,7 @@ def main():
         print("\n" + "=" * 60)
         print(f"K-Fold Summary for Combo {combo_id}")
         print("=" * 60)
+        print(f"Best Epoch:         {mean_results['best_epoch']:.1f} +/- {std_results['best_epoch']:.1f}")
         print(f"Best Val Loss:      {mean_results['best_val_loss']:.4f} +/- {std_results['best_val_loss']:.4f}")
         print(f"Best Val Accuracy:  {mean_results['best_val_acc']:.4f} +/- {std_results['best_val_acc']:.4f}")
         print(f"Best Val F1:        {mean_results['best_val_f1']:.4f} +/- {std_results['best_val_f1']:.4f}")
@@ -435,10 +437,14 @@ def main():
     # Print the best combo by val F1
     if os.path.isfile(results_csv_path):
         summary = pd.read_csv(results_csv_path)
+        if os.path.isfile(combos_csv_path):
+            combos_df = pd.read_csv(combos_csv_path)
+            summary = summary.merge(combos_df, on='combo_id', how='left')
         best_row = summary.loc[summary['best_val_f1_mean'].idxmax()]
         print(f"\nBest combo (by mean val F1): combo_id={int(best_row['combo_id'])}")
         for k in grid_keys:
             print(f"  {k}: {best_row[k]}")
+        print(f"  Best Epoch: {best_row['best_epoch_mean']:.1f} +/- {best_row['best_epoch_std']:.1f}")
         print(f"  Val F1:  {best_row['best_val_f1_mean']:.4f} +/- {best_row['best_val_f1_std']:.4f}")
         print(f"  Test F1: {best_row['test_f1_mean']:.4f} +/- {best_row['test_f1_std']:.4f}  (not used for selection)")
 
