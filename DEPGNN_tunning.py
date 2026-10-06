@@ -181,41 +181,41 @@ def main():
     parser.add_argument('--loss', type=str, default='CrossEntropyLoss', help='CrossEntropyLoss, BCEWithLogitsLoss')
     parser.add_argument('--y_dim', type=int, default=2, help='Num of classes,either categorical or one-hot: 2 for binary or 2+ for multiclass with CrossEntropyLoss, 1 for binary with BCEWithLogitsLoss')
     parser.add_argument('--epochs', type=int, default=200, help='number of epochs (default: 50)')
-    parser.add_argument('--model_name', type=str, default='GCN', help='model name from model/<GNN_name>.py file')
-    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml', help='model config file')
+    parser.add_argument('--model_name', type=str, default='GCN_MoG', help='model name from model/<GNN_name>.py file')
+    parser.add_argument('--model_config', type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn_MoG.yaml', help='model config file')
     parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 128)')
-    parser.add_argument('--lr', type=float, default=[0.0001,0.001, 0.00001], nargs='+', help='learning rate(s) for grid search')
+    parser.add_argument('--lr', type=float, default=[0.00001, 0.0001, 0.001], nargs='+', help='learning rate(s) for grid search')
     parser.add_argument('--weight_decay', type=float, default=1e-3, help='weight decay (default: 5e-2)')
     parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer AdamW,(Adam)')
 
     """############ DEP Sampler  ############"""
-    parser.add_argument('--alpha', type=float, default=[0.0001, 0.001, 0.00001], nargs='+', help='alpha sparsity hyperparameter(s)')
-    parser.add_argument('--beta', type=float, default=[0.0001, 0.00001, 0.000001], nargs='+', help='beta sparsity hyperparameter(s)')
+    parser.add_argument('--alpha', type=float, default= [0.00001, 0.0001, 0.001], nargs='+', help='alpha sparsity hyperparameter(s)')
+    parser.add_argument('--beta', type=float, default= [0.00001, 0.0001, 0], nargs='+', help='beta sparsity hyperparameter(s)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
-    parser.add_argument('--curr_sp', type=float, default=0.0, help='current sparsity level (default: 0.05)')
+    parser.add_argument('--curr_sp', type=float, default=0.5, help='current sparsity level (default: 0.05)')
     parser.add_argument('--iter_step', type=int, default=5,  help='num epoch to increase sp level') # nargs='+',
     parser.add_argument('--prune_sp', type=float, default=0.05, help='incremental prunning sparsity')
-    parser.add_argument('--dropout', type=float, default=0.5, help='dropout (use 0.0 for None)')
+    parser.add_argument('--dropout', type=float, default= 0.5, help='dropout (use 0.0 for None)')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
                         default= 'PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', #'PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex', 
                         help='name of the dataset folder to use?')
     parser.add_argument('--data_dir', type=str,
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
+                        default='/mnt/datafast/ines/DEPGNN/Data/',
                         help='datasets_dir')
     parser.add_argument('--split', type=float,
                         nargs='+',
                         default=[0.8, 0.2],
                         help='Train/val/test proportions, e.g., for k fold set only train and test --split 0.9 0.1 0 / for holdout method --split 0.8 0.1 0.1')
-    parser.add_argument('--num_repeats', type=int, default=1, help='num of repeats for k-fold (default: 1)')
-    parser.add_argument('--k_folds', type=int, default=4, help='num of k folds (default: 4)')
+    parser.add_argument('--num_repeats', type=int, default=2, help='num of repeats for k-fold (default: 1)')
+    parser.add_argument('--k_folds', type=int, default=5, help='num of k folds (default: 4)')
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader')
 
     """############ OUTPUT SETTINGS ############"""
     parser.add_argument('--model_dir', type=str,
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/results/tune_results/',
+                        default='/home/isampaio/Desktop/Ines/DEPGNN/results/tune_results/GCN_MoG_sp50_06_08_2026',
                         help='folder to save all tuning results (combos CSV, results CSV, best model)')
     parser.add_argument('--disable_verb', type=bool,
                         default=True,

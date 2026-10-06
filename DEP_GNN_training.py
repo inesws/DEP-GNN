@@ -1,5 +1,6 @@
 
 import argparse
+import json
 import random
 import os
 
@@ -83,31 +84,31 @@ def main():
     parser.add_argument('--patience', type=int, default=50, help='num of epochs patience for early_stopping (default: 10)')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size for training (default: 128)')
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate (default: 1e-3)')
-    parser.add_argument('--weight_decay', type=float, default=None, help='weight decay (default: 5e-2)')
-    parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer AdamW,(Adam)')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='weight decay (default: 5e-2)')
+    parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer AdamW,(Adam)')
 
     """############ DEP Sampler  ############"""
-    parser.add_argument('--alpha', type=float, default=0.0001, help='alpha sparsity hyperparameter (default: 1e-5)')
+    parser.add_argument('--alpha', type=float, default=0.00001, help='alpha sparsity hyperparameter (default: 1e-5)')
     parser.add_argument('--beta', type=float, default=0.001, help='beta sparsity hyperparameter (default: 1e-5)')
     parser.add_argument('--DEP_lr', type=float, default=None, help='use different lr for DEP training (default: None)')
-    parser.add_argument('--curr_sp', type=float, default=0.05, help='current sparsity level (default: 0.05)')
-    parser.add_argument('--iter_step', type=int, default=9, help='num epoch to increase sp level (default: 10)')
+    parser.add_argument('--curr_sp', type=float, default=0.0, help='current sparsity level (default: 0.05)')
+    parser.add_argument('--iter_step', type=int, default=5, help='num epoch to increase sp level (default: 10)')
     parser.add_argument('--prune_sp', type=float, default=0.05, help='incremental prunning sparsity (default: 0.05)')
-    parser.add_argument('--dropout', type=float, default=None, help='dropout')
+    parser.add_argument('--dropout', type=float, default=0.5, help='dropout')
 
     """############ Graph Dataset  ############"""
     parser.add_argument('--dataset_name', type=str,
                         default='NodeID_EdgeW_PearC_Sp_fully_connected_raw_Sex',
                         help='name of the dataset folder to use?')
     parser.add_argument('--data_dir', type=str,
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/Data/',
+                        default='/mnt/datafast/ines/DEPGNN/Data/',
                         help='datasets_dir') 
     parser.add_argument('--split', type=float, 
                         nargs= '+',
                         default=[0.8, 0.1, 0.1],
                         help='Train/val/test proportions, e.g.,--split 0.9 0.1 0 --split 0.8 0.1 0.1')
-    parser.add_argument('--num_repeats', type=int, default=1, help='num of repeats for k-fold (default: 1)')
-    parser.add_argument('--k_folds',type=int, default= 4, help='num of k folds (default: 4)')
+    parser.add_argument('--num_repeats', type=int, default=2, help='num of repeats for k-fold (default: 1)')
+    parser.add_argument('--k_folds',type=int, default= 5, help='num of k folds (default: 4)')
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers in dataloader') # to be implemented 
 
     """############ CRITICAL DEP SETTINGS############"""
@@ -121,7 +122,7 @@ def main():
                     default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth', 
                     help='path to pretrained DEP sampler checkpoint (includes weights and prune percentage)')
     parser.add_argument('--model_dir', type=str, 
-                    default='/home/isampaio/Desktop/Ines/DEPGNN/results/model2',
+                    default='/home/isampaio/Desktop/Ines/DEPGNN/results/myoldGCN_combo31_v5/',
                     help='directory to save trained models')
 
 
@@ -252,7 +253,7 @@ def main():
                 os.makedirs(params.model_dir)
             
             # Train this fold
-            results = train_one_fold(params, data_loaders, fold_model, fold_sampler)
+            results, sampler, model = train_one_fold(params, data_loaders, fold_model, fold_sampler)
             all_results.append(results)
             
             # Restore original model_dir
@@ -311,6 +312,42 @@ def main():
             })
             summary_df.to_csv(summary_save_path, index=False)
             print(f"Summary statistics saved to: {summary_save_path}")
+
+    # ── Save hyperpar to JSON ─────────────────────────────────────────────
+    results = {
+        "dataset_name": params.dataset_name,
+        "split": params.split,
+        "k_folds": params.k_folds,
+        "num_repeats": params.num_repeats,
+        "epochs": params.epochs,
+        "model_name": params.model_name,
+        "batch_size": params.batch_size,
+        "optimizer": params.optimizer,
+        "weight_decay": params.weight_decay,
+        "alpha": params.alpha,
+        "beta": params.beta,
+        "DEP_lr": params.DEP_lr,
+        "curr_sp": params.curr_sp,
+        "iter_step": params.iter_step,
+        "prune_sp": params.prune_sp,
+        "dropout": params.dropout,
+        "lr": params.lr,
+        "freeze": params.freeze,
+        "seed": params.seed,
+        "loss": params.loss,
+        "y_dim": params.y_dim,
+        "patience": params.patience,
+        "cuda": params.cuda
+
+    }
+
+    results_path = os.path.join(
+        original_model_dir,
+        f"DEP_{params.dataset_name}_seed{params.seed}.json",
+    )
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to {results_path}")        
 
     print('\n' + "=" * 60)
     print('Training Complete!')

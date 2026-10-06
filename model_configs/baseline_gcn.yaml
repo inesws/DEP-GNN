@@ -1,0 +1,19 @@
+# DEP-GNN/model_configs/baseline_gcn.yaml
+
+# Model architecture
+hidden_dim: [32] #[32, 64] 
+num_layers: [2] #[2, 3]
+dropout: [0.3, 0.5] #[0.3, 0.5]
+
+# Optimization
+lr: [1e-3] #[1e-4, 3e-4, 1e-3, 3e-3]
+weight_decay: [0] #[0, 1e-5, 1e-4, 1e-3]
+batch_size: [32]
+
+# Training
+epochs: [5] #[100]
+patience: [15]
+
+# Graph convolution
+use_edge_weight: [true]
+

@@ -324,7 +324,9 @@ class Trainer(object):
             # Add regularization if sampler exists and not frozen
             if sampler is not None and not self.params.freeze:
                 l1_penalty = sampler.l1_norm()
-                loss = loss + l1_penalty
+                l2_penalty = self.sampler.l2_norm()
+
+                loss = loss + l1_penalty + l2_penalty
             
             losses.append(loss.item())
 
@@ -414,7 +416,8 @@ class Trainer(object):
                 
                 # Add regularization
                 l1_penalty = self.sampler.l1_norm()
-                loss = loss_clf + l1_penalty
+                l2_penalty = self.sampler.l2_norm()
+                loss = loss_clf + l1_penalty + l2_penalty
                 
                 truths += data.y.detach().cpu().numpy().tolist()
                 preds += out.detach().cpu().numpy().tolist()

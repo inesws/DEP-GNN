@@ -1,0 +1,19 @@
+# GCN with MoG Architecture (supports mask-based sparsification)
+# Compatible with topology sparsification for MoG framework
+
+num_layers: [3]
+hidden_dim: [128]
+
+# Dropout and regularization
+dropout: [0.5]              # Dropout in GCN layers
+final_dropout: [0.5]        # Dropout before final classifier
+
+# Graph pooling options: mean, sum, max, attention, set2set
+graph_pooling_type: [mean]
+
+# MoG-specific features
+residual: [False]           # Enable residual connections between layers
+jk_mode: [last]             # JK aggregation: 'last' or 'sum'
+
+# Note: edge_attr and activ_funct are not used in this MoG version
+# (custom GCNConv handles activation internally)
