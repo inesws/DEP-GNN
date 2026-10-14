@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -37,9 +37,9 @@ from utils.customDataset import BrainGraphDataset
 from utils.model_utils import read_yaml
 
 LOGGER = logging.getLogger("baselines")
-SPLIT_REPEATS = 1 #2
-SPLIT_FOLDS = 2  #5
-LR_GRID = tuple(np.logspace(-4, 2, 1)) #tuple(np.logspace(-4, 2, 7))
+SPLIT_REPEATS = 2
+SPLIT_FOLDS = 5
+LR_GRID = tuple([0.01]) # tuple([0.01, 0.1, 1.0, 10.0]) #tuple(np.logspace(-4, 2, 7))
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,30 @@ def _as_subject_id(value: Any) -> str:
 def _labels_from_graphs(dataset: BrainGraphDataset) -> np.ndarray:
     """Read graph labels in dataset order."""
     return np.asarray([int(dataset[i].y.item()) for i in range(len(dataset))])
+
+def transform_labels(dataset: BrainGraphDataset, y: np.ndarray ) -> tuple[BrainGraphDataset, np.ndarray]:
+    """Read graph labels in dataset order."""
+    
+    if np.array_equal(np.unique(y), np.array([1, 2])):
+        y = y - 1
+
+    graph_labels = _labels_from_graphs(dataset)
+
+    def normalize_graph(data: Data) -> Data:
+        """Apply the existing transform and normalize the graph label."""
+        
+        data.y = data.y.to(dtype=torch.long) - 1
+        
+        return data
+
+    if np.array_equal(np.unique(graph_labels), np.array([1, 2])):
+            dataset.transform = normalize_graph
+
+
+    if not np.array_equal(_labels_from_graphs(dataset), y):
+        raise ValueError("Graph labels were not normalized consistently")
+    
+    return dataset, y
 
 
 def load_or_create_splits(
@@ -122,12 +146,17 @@ def load_or_create_splits(
 
 
 def metric_values(labels: np.ndarray, scores: np.ndarray) -> dict[str, float]:
-    """Return AUC and thresholded F1, with an explicit NaN for undefined AUC."""
+    """Return AUC and thresholded classification metrics."""
     try:
         auc = float(roc_auc_score(labels, scores))
     except ValueError:
         auc = float("nan")
-    return {"auc": auc, "f1": float(f1_score(labels, scores >= 0.5, zero_division=0))}
+    predictions = scores >= 0.5
+    return {
+        "auc": auc,
+        "f1": float(f1_score(labels, predictions, zero_division=0)),
+        "balanced_accuracy": float(balanced_accuracy_score(labels, predictions)),
+    }
 
 
 def mean_std(values: Iterable[float]) -> dict[str, float]:
@@ -156,35 +185,44 @@ def run_logistic_regression(
                 ]
             )
             model.fit(X[fold_train], y[fold_train])
-            fold_metrics.append(
-                metric_values(y[fold_val], model.predict_proba(X[fold_val])[:, 1])
-            )
+            fold_metrics.append({
+                **metric_values(y[fold_val], model.predict_proba(X[fold_val])[:, 1]),
+                "test": metric_values(
+                    y[splits.test_idx],
+                    model.predict_proba(X[splits.test_idx])[:, 1],
+                ),
+            })
         candidates.append({"C": float(c_value), "folds": fold_metrics})
         LOGGER.info(
-            "LR C=%g: mean CV AUC=%.4f, F1=%.4f",
+            "LR C=%g: mean CV AUC=%.4f, F1=%.4f, balanced accuracy=%.4f",
             c_value,
             np.nanmean([metric["auc"] for metric in fold_metrics]),
             np.nanmean([metric["f1"] for metric in fold_metrics]),
+            np.nanmean([metric["balanced_accuracy"] for metric in fold_metrics]),
         )
     best = max(candidates, key=lambda item: np.nanmean([m["auc"] for m in item["folds"]]))
     LOGGER.info("LR best C=%g", best["C"])
-    final_model = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("classifier", LogisticRegression(C=best["C"], max_iter=2000, solver="liblinear")),
-        ]
+    test_metrics = {
+        metric: mean_std(fold["test"][metric] for fold in best["folds"])
+        for metric in ("auc", "f1", "balanced_accuracy")
+    }
+    LOGGER.info(
+        "LR test AUC=%.4f +/- %.4f, F1=%.4f +/- %.4f, "
+        "balanced accuracy=%.4f +/- %.4f",
+        test_metrics["auc"]["mean"],
+        test_metrics["auc"]["std"],
+        test_metrics["f1"]["mean"],
+        test_metrics["f1"]["std"],
+        test_metrics["balanced_accuracy"]["mean"],
+        test_metrics["balanced_accuracy"]["std"],
     )
-    train_idx = np.concatenate([tr for tr, _ in splits.folds])
-    train_idx = np.unique(train_idx)
-    final_model.fit(X[train_idx], y[train_idx])
-    test_metrics = metric_values(y[splits.test_idx], final_model.predict_proba(X[splits.test_idx])[:, 1])
-    LOGGER.info("LR test AUC=%.4f, F1=%.4f", test_metrics["auc"], test_metrics["f1"])
     return {
         "best_hyperparameters": {"C": best["C"]},
         "folds": best["folds"],
         "cv": {
             "auc": mean_std(m["auc"] for m in best["folds"]),
             "f1": mean_std(m["f1"] for m in best["folds"]),
+            "balanced_accuracy": mean_std(m["balanced_accuracy"] for m in best["folds"]),
         },
         "test": test_metrics,
     }
@@ -233,8 +271,9 @@ def train_gcn_fold(
     input_dim: int,
     config: dict[str, Any],
     seed: int,
+    test_idx: np.ndarray,
     device: torch.device,
-) -> tuple[dict[str, float], int]:
+) -> tuple[dict[str, float], dict[str, float], int]:
     """Train one fold with validation-AUC early stopping."""
     setup_seed(seed)
     model = DenseGCN(
@@ -245,6 +284,7 @@ def train_gcn_fold(
     criterion = nn.CrossEntropyLoss()
     train_loader = _loader(dataset, train_idx, int(config["batch_size"]), seed, True)
     val_loader = _loader(dataset, val_idx, int(config["batch_size"]), seed, False)
+    test_loader = _loader(dataset, test_idx, int(config["batch_size"]), seed, False)
     best_auc, best_epoch, stale, best_state = -np.inf, 0, 0, None
     epoch_bar = tqdm(
         range(1, int(config["epochs"]) + 1),
@@ -277,7 +317,7 @@ def train_gcn_fold(
                 break
     if best_state is not None:
         model.load_state_dict(best_state)
-    return evaluate_gcn(model, val_loader, device), best_epoch
+    return evaluate_gcn(model, val_loader, device), evaluate_gcn(model, test_loader, device), best_epoch
 
 
 def evaluate_gcn(model: DenseGCN, loader: DataLoader, device: torch.device) -> dict[str, float]:
@@ -317,7 +357,7 @@ def run_gcn(
     dataset: BrainGraphDataset, splits: Splits, configs: list[dict[str, Any]],
     seed: int, device: torch.device,
 ) -> dict[str, Any]:
-    """Tune GCN settings on the shared folds, then retrain on all 80% training subjects."""
+    """Tune GCN settings and evaluate every fold model on the held-out test set."""
     input_dim = int(dataset[0].x.shape[-1])
     candidates = []
     LOGGER.info(
@@ -339,44 +379,53 @@ def run_gcn(
             leave=False,
         )
         for fold_number, (train_idx, val_idx) in fold_bar:
-            result, best_epoch = train_gcn_fold(dataset, train_idx, val_idx, input_dim, config, seed + fold_number, device)
+            result, test_result, best_epoch = train_gcn_fold(
+                dataset, train_idx, val_idx, input_dim, config,
+                seed + fold_number, splits.test_idx, device,
+            )
+            result["test"] = test_result
+            result["best_epoch"] = best_epoch
             fold_results.append(result)
             epochs.append(best_epoch)
             fold_bar.set_postfix(val_auc=f"{result['auc']:.4f}", val_f1=f"{result['f1']:.4f}")
         candidates.append({"config": config, "folds": fold_results, "epochs": epochs})
         LOGGER.info(
-            "GCN config %d: mean CV AUC=%.4f, F1=%.4f",
+            "GCN config %d: mean CV AUC=%.4f, F1=%.4f, balanced accuracy=%.4f",
             config_number,
             np.nanmean([metric["auc"] for metric in fold_results]),
             np.nanmean([metric["f1"] for metric in fold_results]),
+            np.nanmean([metric["balanced_accuracy"] for metric in fold_results]),
         )
     best = max(candidates, key=lambda item: np.nanmean([m["auc"] for m in item["folds"]]))
     LOGGER.info("GCN best configuration: %s", best["config"])
-    train_idx = np.unique(np.concatenate([tr for tr, _ in splits.folds]))
-    final_config = dict(best["config"])
-    final_config["epochs"] = max(1, int(np.nanmean(best["epochs"])))
-    model = DenseGCN(input_dim, int(final_config["hidden_dim"]), int(final_config["num_layers"]),
-                     float(final_config["dropout"]), bool(final_config["use_edge_weight"])).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(final_config["lr"]), weight_decay=float(final_config["weight_decay"]))
-    model.train()
     LOGGER.info(
-        "GCN final training on %d subjects for %d epochs",
-        len(train_idx),
-        final_config["epochs"],
+        "GCN CV best epoch: %.2f +/- %.2f",
+        np.mean(best["epochs"]),
+        np.std(best["epochs"]),
     )
-    for _ in tqdm(range(final_config["epochs"]), desc="GCN final training", unit="epoch"):
-        for batch in _loader(dataset, train_idx, int(final_config["batch_size"]), seed, True):
-            batch = batch.to(device)
-            optimizer.zero_grad()
-            loss = F.cross_entropy(model(batch), batch.y.view(-1))
-            loss.backward()
-            optimizer.step()
-    test = evaluate_gcn(model, _loader(dataset, splits.test_idx, int(final_config["batch_size"]), seed, False), device)
-    LOGGER.info("GCN test AUC=%.4f, F1=%.4f", test["auc"], test["f1"])
+    test = {
+        metric: mean_std(fold["test"][metric] for fold in best["folds"])
+        for metric in ("auc", "f1", "balanced_accuracy")
+    }
+    LOGGER.info(
+        "GCN test AUC=%.4f +/- %.4f, F1=%.4f +/- %.4f, "
+        "balanced accuracy=%.4f +/- %.4f",
+        test["auc"]["mean"],
+        test["auc"]["std"],
+        test["f1"]["mean"],
+        test["f1"]["std"],
+        test["balanced_accuracy"]["mean"],
+        test["balanced_accuracy"]["std"],
+    )
     return {
         "best_hyperparameters": best["config"],
         "folds": best["folds"],
-        "cv": {"auc": mean_std(m["auc"] for m in best["folds"]), "f1": mean_std(m["f1"] for m in best["folds"])},
+        "cv": {
+            "auc": mean_std(m["auc"] for m in best["folds"]),
+            "f1": mean_std(m["f1"] for m in best["folds"]),
+            "balanced_accuracy": mean_std(m["balanced_accuracy"] for m in best["folds"]),
+            "best_epoch": mean_std(m["best_epoch"] for m in best["folds"]),
+        },
         "test": test,
     }
 
@@ -397,14 +446,14 @@ def check_alignment(dataset: BrainGraphDataset, vector_ids: Sequence[Any], vecto
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", type=str, default='Sex')
-    parser.add_argument("--sparsity", choices=("full", "top1", "top10", "top30"), default='full')
+    parser.add_argument("--task", type=str, default='FluidIntelligence', help="task name for output directory: Sex ; FluidIntelligence")
+    parser.add_argument("--sparsity", choices=("full", "top1", "top10", "top30"), default='top30')
     parser.add_argument("--data_dir", type=str,
                         default='/mnt/datafast/ines/DEPGNN/')
     parser.add_argument("--dataset_name", type=str,
-                        default='PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex')
+                        default='PearC_EdgeW_PearC_Sp30_raw_CogFluidComp_AgeAdj_class') #CogFluidComp_AgeAdj_class
     parser.add_argument("--npz_path", type=str,
-                        default='/mnt/datafast/ines/DEPGNN/fc_upper_triangle_sp_fully_connected_Male.npz')
+                        default='/mnt/datafast/ines/DEPGNN/fc_upper_triangle_sp_topk_30_CogFluidComp_AgeAdj_class.npz') #10_CogFluidComp_AgeAdj_class
     parser.add_argument("--config", type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/baseline_gcn.yaml', help='model config files')
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--models", choices=("lr", "gcn", "both"), default="both")
@@ -425,8 +474,17 @@ def save_results(results: dict[str, Any], output_dir: Path) -> None:
             row[f"{name}_auc_std"] = results[name]["cv"]["auc"]["std"]
             row[f"{name}_f1_mean"] = results[name]["cv"]["f1"]["mean"]
             row[f"{name}_f1_std"] = results[name]["cv"]["f1"]["std"]
-            row[f"{name}_test_auc"] = results[name]["test"]["auc"]
-            row[f"{name}_test_f1"] = results[name]["test"]["f1"]
+            row[f"{name}_balanced_accuracy_mean"] = results[name]["cv"]["balanced_accuracy"]["mean"]
+            row[f"{name}_balanced_accuracy_std"] = results[name]["cv"]["balanced_accuracy"]["std"]
+            row[f"{name}_test_auc_mean"] = results[name]["test"]["auc"]["mean"]
+            row[f"{name}_test_auc_std"] = results[name]["test"]["auc"]["std"]
+            row[f"{name}_test_f1_mean"] = results[name]["test"]["f1"]["mean"]
+            row[f"{name}_test_f1_std"] = results[name]["test"]["f1"]["std"]
+            row[f"{name}_test_balanced_accuracy_mean"] = results[name]["test"]["balanced_accuracy"]["mean"]
+            row[f"{name}_test_balanced_accuracy_std"] = results[name]["test"]["balanced_accuracy"]["std"]
+            if "best_epoch" in results[name]["cv"]:
+                row[f"{name}_best_epoch_mean"] = results[name]["cv"]["best_epoch"]["mean"]
+                row[f"{name}_best_epoch_std"] = results[name]["cv"]["best_epoch"]["std"]
 
     csv_path = output_dir / "summary.csv"
     with csv_path.open("w", newline="") as handle:
@@ -452,6 +510,7 @@ def main() -> None:
     if len(dataset) != len(X):
         raise ValueError("Graph and vector dataset lengths differ")
     check_alignment(dataset, subject_ids, y)
+    dataset, y = transform_labels(dataset, y)
     split_file = Path("splits") / f"{args.task}_seed{args.seed}.json"
     splits = load_or_create_splits(y, subject_ids, split_file, args.seed)
     results: dict[str, Any] = {"task": args.task, "sparsity": args.sparsity, "seed": args.seed}
@@ -464,15 +523,33 @@ def main() -> None:
     LOGGER.info("Output directory: %s", output_dir)
     save_results(results, output_dir)
     LOGGER.info("Final summary")
-    LOGGER.info("model | CV AUC (mean +/- std) | CV F1 (mean +/- std) | test AUC | test F1")
+    LOGGER.info(
+        "model | CV AUC (mean +/- std) | CV F1 (mean +/- std) | "
+        "CV balanced accuracy (mean +/- std) | test AUC (mean +/- std) | "
+        "test F1 (mean +/- std) | test balanced accuracy (mean +/- std)"
+    )
     for name in ("lr", "gcn"):
         if name in results:
-            cv_auc, cv_f1 = results[name]["cv"]["auc"], results[name]["cv"]["f1"]
+            cv_auc = results[name]["cv"]["auc"]
+            cv_f1 = results[name]["cv"]["f1"]
+            cv_balanced_accuracy = results[name]["cv"]["balanced_accuracy"]
             test = results[name]["test"]
             LOGGER.info(
-                "%s | %.4f +/- %.4f | %.4f +/- %.4f | %.4f | %.4f",
-                name, cv_auc["mean"], cv_auc["std"], cv_f1["mean"], cv_f1["std"],
-                test["auc"], test["f1"],
+                "%s | %.4f +/- %.4f | %.4f +/- %.4f | %.4f +/- %.4f | "
+                "%.4f +/- %.4f | %.4f +/- %.4f | %.4f +/- %.4f",
+                name,
+                cv_auc["mean"],
+                cv_auc["std"],
+                cv_f1["mean"],
+                cv_f1["std"],
+                cv_balanced_accuracy["mean"],
+                cv_balanced_accuracy["std"],
+                test["auc"]["mean"],
+                test["auc"]["std"],
+                test["f1"]["mean"],
+                test["f1"]["std"],
+                test["balanced_accuracy"]["mean"],
+                test["balanced_accuracy"]["std"],
             )
 
 

@@ -37,8 +37,8 @@ class BrainGraphDataset(Dataset):
             data = Data(x=node_features, edge_index=edge_index, y=label, edge_attr=edge_att)
 
         # Apply transformations if any
-        if self.transform:
-            data = self.transform(data)
+        #if self.transform:
+        #    data = self.transform(data)
 
         return data
 
