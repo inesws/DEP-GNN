@@ -159,6 +159,7 @@ def fixed_mask_run(params, data_loaders, model, H, subdir, node_feat_dim, output
     p.freeze = True                 # internal only: does not change the user's --freeze
     p.epochs = params.ft_epochs
     p.patience = params.patience
+    p.print_model = False           # the architecture is printed once by the main fold run
     os.makedirs(p.model_dir, exist_ok=True)
     H = torch.as_tensor(H, dtype=torch.bool)
     sampler = DEP(p, node_feat_dim, output_dim)
@@ -241,20 +242,20 @@ def main():
     parser.add_argument('--cuda', type=int, default=0)
     parser.add_argument('--loss', choices=('CrossEntropyLoss', 'BCEWithLogitsLoss'), default='CrossEntropyLoss')
     parser.add_argument('--y_dim', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=300,
+    parser.add_argument('--epochs', type=int, default=300, #300
                         help='upper bound for the DEP pruning phase; it stops after the last level')
-    parser.add_argument('--model_name', type=str, default='GCN')
+    parser.add_argument('--model_name', type=str, default='GCN_baseline')
     parser.add_argument('--model_config', type=str,
-                        default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/gcn.yaml',
+                        default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/baseline_gcn.yaml',
                         help='must define the SAME GCN as the DenseGCN baseline for this task')
     parser.add_argument('--patience', type=int, default=20,
                         help='early-stopping patience (val AUC) for every frozen-mask phase: B, C, --freeze runs')
-    parser.add_argument('--ft_epochs', type=int, default=200,
+    parser.add_argument('--ft_epochs', type=int, default=100, #200
                         help='max epochs for every frozen-mask phase (same budget as the GCN baseline)')
     parser.add_argument('--batch_size', type=int, default=32, help='same as baseline')
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--weight_decay', type=float, default=1e-3, help='GCN only; DEP scores get 0')
-    parser.add_argument('--optimizer', choices=('AdamW', 'Adam'), default='AdamW', help='same as baseline')
+    parser.add_argument('--optimizer', choices=('AdamW', 'Adam'), default='Adam', help='same as baseline')
     parser.add_argument('--use_scheduler', action='store_true', help='cosine LR schedule (off = as baseline)')
     parser.add_argument('--clip_value', type=float, default=0.0)
  
@@ -265,9 +266,11 @@ def main():
     parser.add_argument('--curr_sp', type=float, default=0.0)
     parser.add_argument('--iter_step', type=int, default=5)
     parser.add_argument('--prune_sp', type=float, default=0.05)
-    parser.add_argument('--warmup_epochs', type=int, default=50)
+    parser.add_argument('--warmup_epochs', type=int, default=20) #20
     parser.add_argument('--max_sp', type=float, default=0.999)
     parser.add_argument('--delta', type=float, default=0.01, help='val-AUC tolerance; fix before running')
+    parser.add_argument('--mask_node_features', action=argparse.BooleanOptionalAction, default=True,
+                        help='mask node features with the DEP edge mask (default: enabled)')
  
     """############ Follow-up runs per fold ############"""
     parser.add_argument('--finetune', action=argparse.BooleanOptionalAction, default=True,
@@ -277,15 +280,13 @@ def main():
                         help='C: new GCN from scratch with the DEP mask frozen (mask-quality control)')
  
     """############ Graph Dataset  ############"""
-    parser.add_argument('--dataset_name', type=str, required=True,
+    parser.add_argument('--dataset_name', type=str, default='PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex',
                         help='FC-row dataset, e.g. PearC_EdgeW_PearC_Sp_fully_connected_raw_Sex')
     parser.add_argument('--task', choices=('Sex', 'FluidIntelligence'), default='Sex')
-    parser.add_argument('--data_dir', type=str, default='/mnt/datafast/ines/DEPGNN/Data/')
-    parser.add_argument('--baseline_npz', type=str, default=None,
-                        help='baseline fc_upper_triangle_*.npz of this task, to check subject order')
+    parser.add_argument('--data_dir', type=str, default='/mnt/datafast/ines/DEPGNN/')
     parser.add_argument('--num_workers', type=int, default=0)
  
-    """############ CRITICAL DEP SETTINGS############"""
+    """############ Train a GNN with a pretrained DEP mask ############"""
     parser.add_argument('--freeze', action='store_true',
                         help='NO DEP learning: train a GCN on the mask of a loaded sampler '
                              '(requires --use_pretrained_sampler). Not needed for B/C.')
@@ -293,7 +294,13 @@ def main():
                         help='load DEP scores + pruning level from --sampler_pretrain_dir')
     parser.add_argument('--sampler_pretrain_dir', type=str,
                         default='/home/isampaio/Desktop/Ines/DEPGNN/DEP_weights/sampler.pth')
-    parser.add_argument('--model_dir', type=str, required=True, help='new folder per run (never reuse)')
+
+    parser.add_argument(
+        '--model_dir',
+        type=str,
+        default='/home/isampaio/Desktop/Ines/DEPGNN/results/dep_gnn_training_new',
+        help='directory for run configuration, fold results, and checkpoints',
+    )
  
     params = parser.parse_args()
  
@@ -307,13 +314,10 @@ def main():
     if params.use_pretrained_sampler and not params.freeze:
         print("WARNING: DEP continues learning from the loaded scores; the schedule starts at the loaded "
               "pruning level. This is not the protocol of the main experiments.")
-    print(params)
-    setup_seed(params.seed)
-
-
-    ########## Parse parameters ####
-
-    params = parser.parse_args()
+    # When a fixed-mask follow-up is enabled, its test metrics are the final
+    # reported test results. Keep the pruning-stage test evaluation available
+    # only for standalone pruning runs.
+    params.report_prune_test = not (params.finetune or params.retrain)
     print(params)
     setup_seed(params.seed)
 
@@ -335,7 +339,7 @@ def main():
     num_features = sample.x.size(1)
 
     # ── Load the persisted Baselines split ──────────────────────────────
-    train_loaders, val_loaders, test_loader = load_persisted_splits(
+    train_loaders, val_loaders, test_loader, _split_payload = load_persisted_splits(
         dataset, params.task, params.seed, params.batch_size, params.num_workers)
     persisted_folds = len(train_loaders)
     print(f"Loaded persisted split: {persisted_folds} train/validation folds")
@@ -353,7 +357,9 @@ def main():
     model_config = read_yaml(params.model_config)[0]
 
     #### Train!!! #####
-    original_model_dir = params.model_dir
+    # Keep results for different prediction tasks isolated under their task name:
+    # <model_dir>/<task>/fold_k/...
+    original_model_dir = os.path.join(params.model_dir, params.task)
     
     os.makedirs(original_model_dir, exist_ok=True)
     with open(os.path.join(original_model_dir, "run_config.json"), "w") as f:
@@ -374,6 +380,7 @@ def main():
         }
         fold_dir = os.path.join(original_model_dir, f"fold_{fold_idx + 1}")
         params.model_dir = fold_dir
+        params.print_model = fold_idx == 0
         os.makedirs(fold_dir, exist_ok=True)
 
         # 1) DEP learns the mask and sparsity level. The trainer evaluates
