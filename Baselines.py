@@ -39,7 +39,7 @@ from utils.model_utils import read_yaml
 LOGGER = logging.getLogger("baselines")
 SPLIT_REPEATS = 2
 SPLIT_FOLDS = 5
-LR_GRID = tuple([0.01]) # tuple([0.01, 0.1, 1.0, 10.0]) #tuple(np.logspace(-4, 2, 7))
+LR_GRID = tuple([10.0]) # tuple([0.01, 0.1, 1.0, 10.0]) #tuple(np.logspace(-4, 2, 7))
 
 
 @dataclass(frozen=True)
@@ -446,17 +446,17 @@ def check_alignment(dataset: BrainGraphDataset, vector_ids: Sequence[Any], vecto
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", type=str, default='FluidIntelligence', help="task name for output directory: Sex ; FluidIntelligence")
-    parser.add_argument("--sparsity", choices=("full", "top1", "top10", "top30"), default='top30')
+    parser.add_argument("--task", type=str, default='Sex', help="task name for output directory: Sex ; FluidIntelligence")
+    parser.add_argument("--sparsity", choices=("'full_NodeID', full", "top1", "top10", "top30", "top30masked"), default='top0.1masked')
     parser.add_argument("--data_dir", type=str,
                         default='/mnt/datafast/ines/DEPGNN/')
     parser.add_argument("--dataset_name", type=str,
-                        default='PearC_EdgeW_PearC_Sp30_raw_CogFluidComp_AgeAdj_class') #CogFluidComp_AgeAdj_class
+                        default='PearC_masked_EdgeW_PearC_Sp0.1_raw_Sex') #CogFluidComp_AgeAdj_class
     parser.add_argument("--npz_path", type=str,
-                        default='/mnt/datafast/ines/DEPGNN/fc_upper_triangle_sp_topk_30_CogFluidComp_AgeAdj_class.npz') #10_CogFluidComp_AgeAdj_class
+                        default='/mnt/datafast/ines/DEPGNN/fc_upper_triangle_sp_topk_0.1_Male.npz') #10_CogFluidComp_AgeAdj_class
     parser.add_argument("--config", type=str, default='/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/model_configs/baseline_gcn.yaml', help='model config files')
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--models", choices=("lr", "gcn", "both"), default="both")
+    parser.add_argument("--models", choices=("lr", "gcn", "both"), default="gcn")
     parser.add_argument("--out_dir", default="results")
     return parser.parse_args()
 

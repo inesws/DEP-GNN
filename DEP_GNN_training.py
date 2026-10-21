@@ -30,7 +30,8 @@ from utils.dataset_utils import adjust_labels, find_output_dim
 # Model
 sys.path.insert(1, os.path.join('/home/isampaio/Desktop/Ines/DEPGNN/DEP-GNN/', 'models'))
 import models
-from models.DEP import DEP
+from models.DEP import DEP, DEP_new
+
 
 def setup_seed(seed):
     torch.manual_seed(seed)
